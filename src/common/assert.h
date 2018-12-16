@@ -27,6 +27,7 @@ __declspec(noinline, noreturn)
     exit(1); // Keeps GCC's mouth shut about this actually returning
 }
 
+#ifdef _DEBUG
 #define ASSERT(_a_)                                                                                \
     do                                                                                             \
         if (!(_a_)) {                                                                              \
@@ -40,6 +41,21 @@ __declspec(noinline, noreturn)
             assert_noinline_call([&] { LOG_CRITICAL(Debug, "Assertion Failed!\n" __VA_ARGS__); }); \
         }                                                                                          \
     while (0)
+#else // not debug
+#define ASSERT(_a_)                                                                                \
+    do                                                                                             \
+        if (!(_a_)) {                                                                              \
+            LOG_CRITICAL(Debug, "Assertion Failed!");                                              \
+        }                                                                                          \
+    while (0)
+
+#define ASSERT_MSG(_a_, ...)                                                                       \
+    do                                                                                             \
+        if (!(_a_)) {                                                                              \
+            LOG_CRITICAL(Debug, "Assertion Failed!\n" __VA_ARGS__);                                \
+        }                                                                                          \
+    while (0)
+#endif
 
 #define UNREACHABLE() ASSERT_MSG(false, "Unreachable code!")
 #define UNREACHABLE_MSG(...) ASSERT_MSG(false, __VA_ARGS__)
