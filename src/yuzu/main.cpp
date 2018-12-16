@@ -15,6 +15,7 @@
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/am/applets/applets.h"
 
+
 // These are wrappers to avoid the calls to CreateDirectory and CreateFile because of the Windows
 // defines.
 static FileSys::VirtualDir VfsFilesystemCreateDirectoryWrapper(
@@ -90,6 +91,7 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "yuzu/hotkeys.h"
 #include "yuzu/main.h"
 #include "yuzu/ui_settings.h"
+
 
 #ifdef USE_DISCORD_PRESENCE
 #include "yuzu/discord_impl.h"
@@ -199,6 +201,12 @@ GMainWindow::GMainWindow()
     QStringList args = QApplication::arguments();
     if (args.length() >= 2) {
         BootGame(args[1]);
+        // Enter full screen mode
+        // Don't confirm closing
+        UISettings::values.confirm_before_closing = false;
+        ui.action_Single_Window_Mode->setData(true);
+        ShowFullscreen();
+
     }
 }
 
@@ -1804,6 +1812,7 @@ int main(int argc, char* argv[]) {
 
     QApplication::setAttribute(Qt::AA_DontCheckOpenGLContextThreadAffinity);
     QApplication app(argc, argv);
+
 
     // Qt changes the locale and causes issues in float conversion using std::to_string() when
     // generating shaders
