@@ -47,13 +47,15 @@ __declspec(noinline, noreturn)
 #ifdef _DEBUG
 #define DEBUG_ASSERT(_a_) ASSERT(_a_)
 #define DEBUG_ASSERT_MSG(_a_, ...) ASSERT_MSG(_a_, __VA_ARGS__)
+#define UNIMPLEMENTED_IF(cond) ASSERT_MSG(!(cond), "Unimplemented code!")
+#define UNIMPLEMENTED_IF_MSG(cond, ...) ASSERT_MSG(!(cond), __VA_ARGS__)
+#define UNIMPLEMENTED() ASSERT_MSG(false, "Unimplemented code!")
+#define UNIMPLEMENTED_MSG(...) ASSERT_MSG(false, __VA_ARGS__)
 #else // not debug
 #define DEBUG_ASSERT(_a_)
 #define DEBUG_ASSERT_MSG(_a_, _desc_, ...)
+#define UNIMPLEMENTED_IF(cond)
+#define UNIMPLEMENTED_IF_MSG(cond, ...)
+#define UNIMPLEMENTED()
+#define UNIMPLEMENTED_MSG(...)
 #endif
-
-#define UNIMPLEMENTED() ASSERT_MSG(false, "Unimplemented code!")
-#define UNIMPLEMENTED_MSG(...) ASSERT_MSG(false, __VA_ARGS__)
-
-#define UNIMPLEMENTED_IF(cond) ASSERT_MSG(!(cond), "Unimplemented code!")
-#define UNIMPLEMENTED_IF_MSG(cond, ...) ASSERT_MSG(!(cond), __VA_ARGS__)

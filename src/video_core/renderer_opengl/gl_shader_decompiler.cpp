@@ -2891,8 +2891,8 @@ private:
                 const bool depth_compare =
                     instr.texs.UsesMiscMode(Tegra::Shader::TextureMiscMode::DC);
                 const auto process_mode = instr.texs.GetTextureProcessMode();
-                /*UNIMPLEMENTED_IF_MSG(instr.texs.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
-                                     "NODEP is not implemented");*/
+                UNIMPLEMENTED_IF_MSG(instr.texs.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
+                                     "NODEP is not implemented");
                 const auto scope = shader.Scope();
 
                 auto [coord, texture] =
