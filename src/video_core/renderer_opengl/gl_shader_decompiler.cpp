@@ -2891,10 +2891,8 @@ private:
                 const bool depth_compare =
                     instr.texs.UsesMiscMode(Tegra::Shader::TextureMiscMode::DC);
                 const auto process_mode = instr.texs.GetTextureProcessMode();
-
-                UNIMPLEMENTED_IF_MSG(instr.texs.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
-                                     "NODEP is not implemented");
-
+                /*UNIMPLEMENTED_IF_MSG(instr.texs.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
+                                     "NODEP is not implemented");*/
                 const auto scope = shader.Scope();
 
                 auto [coord, texture] =
@@ -3784,136 +3782,142 @@ private:
      * @return the offset of the next instruction to compile. PROGRAM_END if the program
      * terminates.
      */
-    u32 CompileRange(u32 begin, u32 end) {
-        u32 program_counter;
-        for (program_counter = begin; program_counter < (begin > end ? PROGRAM_END : end);) {
-            program_counter = CompileInstr(program_counter);
-        }
-        return program_counter;
-    }
-
-    void Generate(const std::string& suffix) {
-        // Add declarations for all subroutines
-        for (const auto& subroutine : subroutines) {
-            shader.AddLine("bool " + subroutine.GetName() + "();");
-        }
-        shader.AddNewLine();
-
-        // Add the main entry point
-        shader.AddLine("bool exec_" + suffix + "() {");
-        ++shader.scope;
-        CallSubroutine(GetSubroutine(main_offset, PROGRAM_END));
-        --shader.scope;
-        shader.AddLine("}\n");
-
-        // Add definitions for all subroutines
-        for (const auto& subroutine : subroutines) {
-            std::set<u32> labels = subroutine.labels;
-
-            shader.AddLine("bool " + subroutine.GetName() + "() {");
-            ++shader.scope;
-
-            if (labels.empty()) {
-                if (CompileRange(subroutine.begin, subroutine.end) != PROGRAM_END) {
-                    shader.AddLine("return false;");
+                u32 CompileRange(u32 begin, u32 end) {
+                    u32 program_counter;
+                    for (program_counter = begin;
+                         program_counter < (begin > end ? PROGRAM_END : end);) {
+                        program_counter = CompileInstr(program_counter);
+                    }
+                    return program_counter;
                 }
-            } else {
-                labels.insert(subroutine.begin);
-                shader.AddLine("uint jmp_to = " + std::to_string(subroutine.begin) + "u;");
 
-                // TODO(Subv): Figure out the actual depth of the flow stack, for now it seems
-                // unlikely that shaders will use 20 nested SSYs and PBKs.
-                constexpr u32 FLOW_STACK_SIZE = 20;
-                shader.AddLine("uint flow_stack[" + std::to_string(FLOW_STACK_SIZE) + "];");
-                shader.AddLine("uint flow_stack_top = 0u;");
+                void Generate(const std::string& suffix) {
+                    // Add declarations for all subroutines
+                    for (const auto& subroutine : subroutines) {
+                        shader.AddLine("bool " + subroutine.GetName() + "();");
+                    }
+                    shader.AddNewLine();
 
-                shader.AddLine("while (true) {");
-                ++shader.scope;
-
-                shader.AddLine("switch (jmp_to) {");
-
-                for (auto label : labels) {
-                    shader.AddLine("case " + std::to_string(label) + "u: {");
+                    // Add the main entry point
+                    shader.AddLine("bool exec_" + suffix + "() {");
                     ++shader.scope;
+                    CallSubroutine(GetSubroutine(main_offset, PROGRAM_END));
+                    --shader.scope;
+                    shader.AddLine("}\n");
 
-                    const auto next_it = labels.lower_bound(label + 1);
-                    const u32 next_label = next_it == labels.end() ? subroutine.end : *next_it;
+                    // Add definitions for all subroutines
+                    for (const auto& subroutine : subroutines) {
+                        std::set<u32> labels = subroutine.labels;
 
-                    const u32 compile_end = CompileRange(label, next_label);
-                    if (compile_end > next_label && compile_end != PROGRAM_END) {
-                        // This happens only when there is a label inside a IF/LOOP block
-                        shader.AddLine(" jmp_to = " + std::to_string(compile_end) + "u; break; }");
-                        labels.emplace(compile_end);
+                        shader.AddLine("bool " + subroutine.GetName() + "() {");
+                        ++shader.scope;
+
+                        if (labels.empty()) {
+                            if (CompileRange(subroutine.begin, subroutine.end) != PROGRAM_END) {
+                                shader.AddLine("return false;");
+                            }
+                        } else {
+                            labels.insert(subroutine.begin);
+                            shader.AddLine("uint jmp_to = " + std::to_string(subroutine.begin) +
+                                           "u;");
+
+                            // TODO(Subv): Figure out the actual depth of the flow stack, for now it
+                            // seems unlikely that shaders will use 20 nested SSYs and PBKs.
+                            constexpr u32 FLOW_STACK_SIZE = 20;
+                            shader.AddLine("uint flow_stack[" + std::to_string(FLOW_STACK_SIZE) +
+                                           "];");
+                            shader.AddLine("uint flow_stack_top = 0u;");
+
+                            shader.AddLine("while (true) {");
+                            ++shader.scope;
+
+                            shader.AddLine("switch (jmp_to) {");
+
+                            for (auto label : labels) {
+                                shader.AddLine("case " + std::to_string(label) + "u: {");
+                                ++shader.scope;
+
+                                const auto next_it = labels.lower_bound(label + 1);
+                                const u32 next_label =
+                                    next_it == labels.end() ? subroutine.end : *next_it;
+
+                                const u32 compile_end = CompileRange(label, next_label);
+                                if (compile_end > next_label && compile_end != PROGRAM_END) {
+                                    // This happens only when there is a label inside a IF/LOOP
+                                    // block
+                                    shader.AddLine(" jmp_to = " + std::to_string(compile_end) +
+                                                   "u; break; }");
+                                    labels.emplace(compile_end);
+                                }
+
+                                --shader.scope;
+                                shader.AddLine('}');
+                            }
+
+                            shader.AddLine("default: return false;");
+                            shader.AddLine('}');
+
+                            --shader.scope;
+                            shader.AddLine('}');
+
+                            shader.AddLine("return false;");
+                        }
+
+                        --shader.scope;
+                        shader.AddLine("}\n");
+
+                        DEBUG_ASSERT(shader.scope == 0);
                     }
 
-                    --shader.scope;
-                    shader.AddLine('}');
+                    GenerateDeclarations();
                 }
 
-                shader.AddLine("default: return false;");
-                shader.AddLine('}');
+                /// Add declarations for registers
+                void GenerateDeclarations() {
+                    regs.GenerateDeclarations(suffix);
 
-                --shader.scope;
-                shader.AddLine('}');
+                    for (const auto& pred : declr_predicates) {
+                        declarations.AddLine("bool " + pred + " = false;");
+                    }
+                    declarations.AddNewLine();
+                }
 
-                shader.AddLine("return false;");
-            }
+            private:
+                const std::set<Subroutine>& subroutines;
+                const ProgramCode& program_code;
+                Tegra::Shader::Header header;
+                const u32 main_offset;
+                Maxwell3D::Regs::ShaderStage stage;
+                const std::string& suffix;
+                u64 local_memory_size;
+                std::size_t shader_length;
 
-            --shader.scope;
-            shader.AddLine("}\n");
+                ShaderWriter shader;
+                ShaderWriter declarations;
+                GLSLRegisterManager regs{shader, declarations, stage, suffix, header};
 
-            DEBUG_ASSERT(shader.scope == 0);
-        }
+                // Declarations
+                std::set<std::string> declr_predicates;
+            }; // namespace OpenGL::GLShader::Decompiler
 
-        GenerateDeclarations();
-    }
+                std::string GetCommonDeclarations() {
+                    return fmt::format("#define MAX_CONSTBUFFER_ELEMENTS {}\n",
+                                       RasterizerOpenGL::MaxConstbufferSize / sizeof(GLvec4));
+                }
 
-    /// Add declarations for registers
-    void GenerateDeclarations() {
-        regs.GenerateDeclarations(suffix);
+                std::optional<ProgramResult> DecompileProgram(
+                    const ProgramCode& program_code, u32 main_offset,
+                    Maxwell3D::Regs::ShaderStage stage, const std::string& suffix) {
+                    try {
+                        ControlFlowAnalyzer analyzer(program_code, main_offset, suffix);
+                        const auto subroutines = analyzer.GetSubroutines();
+                        GLSLGenerator generator(subroutines, program_code, main_offset, stage,
+                                                suffix, analyzer.GetShaderLength());
+                        return ProgramResult{generator.GetShaderCode(), generator.GetEntries()};
+                    } catch (const DecompileFail& exception) {
+                        LOG_ERROR(HW_GPU, "Shader decompilation failed: {}", exception.what());
+                    }
+                    return {};
+                }
 
-        for (const auto& pred : declr_predicates) {
-            declarations.AddLine("bool " + pred + " = false;");
-        }
-        declarations.AddNewLine();
-    }
-
-private:
-    const std::set<Subroutine>& subroutines;
-    const ProgramCode& program_code;
-    Tegra::Shader::Header header;
-    const u32 main_offset;
-    Maxwell3D::Regs::ShaderStage stage;
-    const std::string& suffix;
-    u64 local_memory_size;
-    std::size_t shader_length;
-
-    ShaderWriter shader;
-    ShaderWriter declarations;
-    GLSLRegisterManager regs{shader, declarations, stage, suffix, header};
-
-    // Declarations
-    std::set<std::string> declr_predicates;
-}; // namespace OpenGL::GLShader::Decompiler
-
-std::string GetCommonDeclarations() {
-    return fmt::format("#define MAX_CONSTBUFFER_ELEMENTS {}\n",
-                       RasterizerOpenGL::MaxConstbufferSize / sizeof(GLvec4));
-}
-
-std::optional<ProgramResult> DecompileProgram(const ProgramCode& program_code, u32 main_offset,
-                                              Maxwell3D::Regs::ShaderStage stage,
-                                              const std::string& suffix) {
-    try {
-        ControlFlowAnalyzer analyzer(program_code, main_offset, suffix);
-        const auto subroutines = analyzer.GetSubroutines();
-        GLSLGenerator generator(subroutines, program_code, main_offset, stage, suffix,
-                                analyzer.GetShaderLength());
-        return ProgramResult{generator.GetShaderCode(), generator.GetEntries()};
-    } catch (const DecompileFail& exception) {
-        LOG_ERROR(HW_GPU, "Shader decompilation failed: {}", exception.what());
-    }
-    return {};
-}
-
-} // namespace OpenGL::GLShader::Decompiler
+            } // namespace OpenGL::GLShader::Decompiler
