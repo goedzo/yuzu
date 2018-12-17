@@ -28,7 +28,6 @@ __declspec(noinline, noreturn)
 }
 
 #ifdef _DEBUG
-
 #define ASSERT(_a_)                                                                                \
     do                                                                                             \
         if (!(_a_)) {                                                                              \
@@ -42,9 +41,7 @@ __declspec(noinline, noreturn)
             assert_noinline_call([&] { LOG_CRITICAL(Debug, "Assertion Failed!\n" __VA_ARGS__); }); \
         }                                                                                          \
     while (0)
-
 #else // not debug
-
 #define ASSERT(_a_)                                                                                \
     do                                                                                             \
         if (!(_a_)) {                                                                              \
@@ -53,17 +50,19 @@ __declspec(noinline, noreturn)
     while (0)
 
 #define ASSERT_MSG(_a_, ...)                                                                       \
-        if (!(_a_)) {                                                                              \
-            LOG_CRITICAL(Debug, "Assertion Failed!\n" __VA_ARGS__);                                \
-        }                                                                                          \
-
+    if (!(_a_)) {                                                                                  \
+        LOG_CRITICAL(Debug, "Assertion Failed!\n" __VA_ARGS__);                                    \
+    }
 #endif
 
 #define UNREACHABLE() ASSERT_MSG(false, "Unreachable code!")
 #define UNREACHABLE_MSG(...) ASSERT_MSG(false, __VA_ARGS__)
+
 #define DEBUG_ASSERT(_a_) ASSERT(_a_)
 #define DEBUG_ASSERT_MSG(_a_, ...) ASSERT_MSG(_a_, __VA_ARGS__)
-#define UNIMPLEMENTED_IF(cond) ASSERT_MSG(!(cond), "Unimplemented code!")
-#define UNIMPLEMENTED_IF_MSG(cond, ...) ASSERT_MSG(!(cond), __VA_ARGS__)
+
 #define UNIMPLEMENTED() ASSERT_MSG(false, "Unimplemented code!")
 #define UNIMPLEMENTED_MSG(...) ASSERT_MSG(false, __VA_ARGS__)
+
+#define UNIMPLEMENTED_IF(cond) ASSERT_MSG(!(cond), "Unimplemented code!")
+#define UNIMPLEMENTED_IF_MSG(cond, ...) ASSERT_MSG(!(cond), __VA_ARGS__)
