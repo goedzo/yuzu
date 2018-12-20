@@ -1591,23 +1591,21 @@ private:
                                 process_mode == Tegra::Shader::TextureProcessMode::LL ||
                                 process_mode == Tegra::Shader::TextureProcessMode::LLA;
 
+        // LOD selection (either via bias or explicit textureLod) not supported in GL for
+        // sampler2DArrayShadow and samplerCubeArrayShadow.
         const bool gl_lod_supported = !(
             (texture_type == Tegra::Shader::TextureType::Texture2D && is_array && depth_compare) ||
-            (texture_type == Tegra::Shader::TextureType::TextureCube && !is_array &&
-             depth_compare));
+            (texture_type == Tegra::Shader::TextureType::TextureCube && is_array && depth_compare));
 
         const std::string read_method = lod_needed && gl_lod_supported ? "textureLod(" : "texture(";
         std::string texture = read_method + sampler + ", coord";
 
-        if (process_mode != Tegra::Shader::TextureProcessMode::None) {
+        UNIMPLEMENTED_IF(process_mode != Tegra::Shader::TextureProcessMode::None &&
+                         !gl_lod_supported);
+
+        if (process_mode != Tegra::Shader::TextureProcessMode::None && gl_lod_supported) {
             if (process_mode == Tegra::Shader::TextureProcessMode::LZ) {
-                if (gl_lod_supported) {
-                    texture += ", 0";
-                } else {
-                    // Lod 0 is emulated by a big negative bias
-                    // in scenarios that are not supported by glsl
-                    texture += ", -1000";
-                }
+                texture += ", 0.0";
             } else {
                 // If present, lod or bias are always stored in the register indexed by the
                 // gpr20
@@ -1645,14 +1643,14 @@ private:
         if (depth_compare && !is_array && texture_type == Tegra::Shader::TextureType::Texture1D) {
             coord += ",0.0";
         }
+        if (is_array) {
+            coord += ',' + regs.GetRegisterAsInteger(array_register);
+        }
         if (depth_compare) {
             // Depth is always stored in the register signaled by gpr20
             // or in the next register if lod or bias are used
             const u64 depth_register = instr.gpr20.Value() + (lod_bias_enabled ? 1 : 0);
             coord += ',' + regs.GetRegisterAsFloat(depth_register);
-        }
-        if (is_array) {
-            coord += ',' + regs.GetRegisterAsInteger(array_register);
         }
         coord += ");";
         return std::make_pair(
@@ -1686,14 +1684,14 @@ private:
             }
         }
 
+        if (is_array) {
+            coord += ',' + regs.GetRegisterAsInteger(array_register);
+        }
         if (depth_compare) {
             // Depth is always stored in the register signaled by gpr20
             // or in the next register if lod or bias are used
             const u64 depth_register = instr.gpr20.Value() + (lod_bias_enabled ? 1 : 0);
             coord += ',' + regs.GetRegisterAsFloat(depth_register);
-        }
-        if (is_array) {
-            coord += ',' + regs.GetRegisterAsInteger(array_register);
         }
         coord += ");";
 
@@ -1867,9 +1865,6 @@ private:
                 UNIMPLEMENTED_IF_MSG(instr.fmul.tab5cb8_2 != 0,
                                      "FMUL tab5cb8_2({}) is not implemented",
                                      instr.fmul.tab5cb8_2.Value());
-                UNIMPLEMENTED_IF_MSG(instr.fmul.tab5c68_1 != 0,
-                                     "FMUL tab5cb8_1({}) is not implemented",
-                                     instr.fmul.tab5c68_1.Value());
                 UNIMPLEMENTED_IF_MSG(
                     instr.fmul.tab5c68_0 != 1, "FMUL tab5cb8_0({}) is not implemented",
                     instr.fmul.tab5c68_0
@@ -1879,7 +1874,26 @@ private:
 
                 op_b = GetOperandAbsNeg(op_b, false, instr.fmul.negate_b);
 
-                regs.SetRegisterToFloat(instr.gpr0, 0, op_a + " * " + op_b, 1, 1,
+                std::string postfactor_op;
+                if (instr.fmul.postfactor != 0) {
+                    s8 postfactor = static_cast<s8>(instr.fmul.postfactor);
+
+                    // postfactor encoded as 3-bit 1's complement in instruction,
+                    // interpreted with below logic.
+                    if (postfactor >= 4) {
+                        postfactor = 7 - postfactor;
+                    } else {
+                        postfactor = 0 - postfactor;
+                    }
+
+                    if (postfactor > 0) {
+                        postfactor_op = " * " + std::to_string(1 << postfactor);
+                    } else {
+                        postfactor_op = " / " + std::to_string(1 << -postfactor);
+                    }
+                }
+
+                regs.SetRegisterToFloat(instr.gpr0, 0, op_a + " * " + op_b + postfactor_op, 1, 1,
                                         instr.alu.saturate_d, 0, true);
                 break;
             }
