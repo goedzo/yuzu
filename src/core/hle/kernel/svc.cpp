@@ -190,10 +190,16 @@ static ResultCode SetHeapSize(VAddr* heap_addr, u64 heap_size) {
         return ERR_INVALID_SIZE;
     }
 
-    auto& process = *Core::CurrentProcess();
-    const VAddr heap_base = process.VMManager().GetHeapRegionBaseAddress();
-    CASCADE_RESULT(*heap_addr,
-                   process.HeapAllocate(heap_base, heap_size, VMAPermission::ReadWrite));
+    auto& vm_manager = Core::CurrentProcess()->VMManager();
+    const VAddr heap_base = vm_manager.GetHeapRegionBaseAddress();
+    const auto alloc_result =
+        vm_manager.HeapAllocate(heap_base, heap_size, VMAPermission::ReadWrite);
+
+    if (alloc_result.Failed()) {
+        return alloc_result.Code();
+    }
+
+    *heap_addr = *alloc_result;
     return RESULT_SUCCESS;
 }
 
@@ -307,15 +313,14 @@ static ResultCode MapMemory(VAddr dst_addr, VAddr src_addr, u64 size) {
     LOG_TRACE(Kernel_SVC, "called, dst_addr=0x{:X}, src_addr=0x{:X}, size=0x{:X}", dst_addr,
               src_addr, size);
 
-    auto* const current_process = Core::CurrentProcess();
-    const auto& vm_manager = current_process->VMManager();
-
+    auto& vm_manager = Core::CurrentProcess()->VMManager();
     const auto result = MapUnmapMemorySanityChecks(vm_manager, dst_addr, src_addr, size);
-    if (result != RESULT_SUCCESS) {
+
+    if (result.IsError()) {
         return result;
     }
 
-    return current_process->MirrorMemory(dst_addr, src_addr, size, MemoryState::Stack);
+    return vm_manager.MirrorMemory(dst_addr, src_addr, size, MemoryState::Stack);
 }
 
 /// Unmaps a region that was previously mapped with svcMapMemory
@@ -323,15 +328,14 @@ static ResultCode UnmapMemory(VAddr dst_addr, VAddr src_addr, u64 size) {
     LOG_TRACE(Kernel_SVC, "called, dst_addr=0x{:X}, src_addr=0x{:X}, size=0x{:X}", dst_addr,
               src_addr, size);
 
-    auto* const current_process = Core::CurrentProcess();
-    const auto& vm_manager = current_process->VMManager();
-
+    auto& vm_manager = Core::CurrentProcess()->VMManager();
     const auto result = MapUnmapMemorySanityChecks(vm_manager, dst_addr, src_addr, size);
-    if (result != RESULT_SUCCESS) {
+
+    if (result.IsError()) {
         return result;
     }
 
-    return current_process->UnmapMemory(dst_addr, src_addr, size);
+    return vm_manager.UnmapRange(dst_addr, size);
 }
 
 /// Connect to an OS service given the port name, returns the handle to the port to out
@@ -932,8 +936,35 @@ static ResultCode GetInfo(u64* result, u64 info_id, u64 handle, u64 info_sub_id)
 }
 
 /// Sets the thread activity
-static ResultCode SetThreadActivity(Handle handle, u32 unknown) {
-    LOG_WARNING(Kernel_SVC, "(STUBBED) called, handle=0x{:08X}, unknown=0x{:08X}", handle, unknown);
+static ResultCode SetThreadActivity(Handle handle, u32 activity) {
+    LOG_DEBUG(Kernel_SVC, "called, handle=0x{:08X}, activity=0x{:08X}", handle, activity);
+    if (activity > static_cast<u32>(ThreadActivity::Paused)) {
+        return ERR_INVALID_ENUM_VALUE;
+    }
+
+    const auto* current_process = Core::CurrentProcess();
+    const SharedPtr<Thread> thread = current_process->GetHandleTable().Get<Thread>(handle);
+    if (!thread) {
+        LOG_ERROR(Kernel_SVC, "Thread handle does not exist, handle=0x{:08X}", handle);
+        return ERR_INVALID_HANDLE;
+    }
+
+    if (thread->GetOwnerProcess() != current_process) {
+        LOG_ERROR(Kernel_SVC,
+                  "The current process does not own the current thread, thread_handle={:08X} "
+                  "thread_pid={}, "
+                  "current_process_pid={}",
+                  handle, thread->GetOwnerProcess()->GetProcessID(),
+                  current_process->GetProcessID());
+        return ERR_INVALID_HANDLE;
+    }
+
+    if (thread == GetCurrentThread()) {
+        LOG_ERROR(Kernel_SVC, "The thread handle specified is the current running thread");
+        return ERR_BUSY;
+    }
+
+    thread->SetActivity(static_cast<ThreadActivity>(activity));
     return RESULT_SUCCESS;
 }
 
@@ -960,7 +991,7 @@ static ResultCode GetThreadContext(VAddr thread_context, Handle handle) {
 
     if (thread == GetCurrentThread()) {
         LOG_ERROR(Kernel_SVC, "The thread handle specified is the current running thread");
-        return ERR_ALREADY_REGISTERED;
+        return ERR_BUSY;
     }
 
     Core::ARM_Interface::ThreadContext ctx = thread->GetContext();
@@ -1245,7 +1276,10 @@ static ResultCode StartThread(Handle thread_handle) {
     ASSERT(thread->GetStatus() == ThreadStatus::Dormant);
 
     thread->ResumeFromWait();
-    Core::System::GetInstance().CpuCore(thread->GetProcessorID()).PrepareReschedule();
+
+    if (thread->GetStatus() == ThreadStatus::Ready) {
+        Core::System::GetInstance().CpuCore(thread->GetProcessorID()).PrepareReschedule();
+    }
 
     return RESULT_SUCCESS;
 }
