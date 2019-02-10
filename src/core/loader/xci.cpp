@@ -128,4 +128,21 @@ ResultStatus AppLoader_XCI::ReadControlData(FileSys::NACP& control) {
     return ResultStatus::Success;
 }
 
+ResultStatus AppLoader_XCI::ReadManualRomFS(FileSys::VirtualFile& file) {
+    const auto nca = xci->GetSecurePartitionNSP()->GetNCA(xci->GetProgramTitleID(),
+                                                          FileSys::ContentRecordType::Manual);
+    if (xci->GetStatus() != ResultStatus::Success || nca == nullptr)
+        return ResultStatus::ErrorXCIMissingPartition;
+    file = nca->GetRomFS();
+    return file == nullptr ? ResultStatus::ErrorNoRomFS : ResultStatus::Success;
+}
+
+ResultStatus AppLoader_XCI::ReadBanner(std::vector<u8>& buffer) {
+    return nca_loader->ReadBanner(buffer);
+}
+
+ResultStatus AppLoader_XCI::ReadLogo(std::vector<u8>& buffer) {
+    return nca_loader->ReadLogo(buffer);
+}
+
 } // namespace Loader

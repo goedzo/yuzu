@@ -6,6 +6,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <map>
 #include <optional>
 #include <string>
@@ -350,6 +351,11 @@ struct Values {
     bool use_docked_mode;
     bool enable_nfc;
     std::optional<u32> rng_seed;
+    // Measured in seconds since epoch
+    std::optional<std::chrono::seconds> custom_rtc;
+    // Set on game boot, reset on stop. Seconds difference between current time and `custom_rtc`
+    std::chrono::seconds custom_rtc_differential;
+
     s32 current_user;
     s32 language_index;
 
@@ -385,6 +391,7 @@ struct Values {
     float resolution_factor;
     bool use_frame_limit;
     u16 frame_limit;
+    bool use_disk_shader_cache;
     bool use_accurate_gpu_emulation;
 
     float bg_red;
@@ -419,4 +426,5 @@ struct Values {
 } extern values;
 
 void Apply();
+void LogSettings();
 } // namespace Settings

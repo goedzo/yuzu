@@ -13,6 +13,7 @@
 
 #include "common/common_types.h"
 #include "core/core.h"
+#include "core/hle/service/acc/profile_manager.h"
 #include "ui_main.h"
 #include "yuzu/compatibility_list.h"
 #include "yuzu/hotkeys.h"
@@ -24,8 +25,10 @@ class GImageInfo;
 class GraphicsBreakPointsWidget;
 class GraphicsSurfaceWidget;
 class GRenderWindow;
+class LoadingScreen;
 class MicroProfileDialog;
 class ProfilerWidget;
+class QLabel;
 class WaitTreeWidget;
 enum class GameListOpenTarget;
 
@@ -103,10 +106,15 @@ signals:
     void SoftwareKeyboardFinishedText(std::optional<std::u16string> text);
     void SoftwareKeyboardFinishedCheckDialog();
 
+    void WebBrowserUnpackRomFS();
+    void WebBrowserFinishedBrowsing();
+
 public slots:
+    void OnLoadComplete();
     void ProfileSelectorSelectProfile();
     void SoftwareKeyboardGetText(const Core::Frontend::SoftwareKeyboardParameters& parameters);
     void SoftwareKeyboardInvokeCheckDialog(std::u16string error_message);
+    void WebBrowserOpenPage(std::string_view filename, std::string_view arguments);
 
 private:
     void InitializeWidgets();
@@ -205,6 +213,7 @@ private:
 
     GRenderWindow* render_window;
     GameList* game_list;
+    LoadingScreen* loading_screen;
 
     // Status bar elements
     QLabel* message_label = nullptr;

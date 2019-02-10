@@ -88,11 +88,15 @@ add_library(core STATIC
     frontend/applets/profile_select.h
     frontend/applets/software_keyboard.cpp
     frontend/applets/software_keyboard.h
+    frontend/applets/web_browser.cpp
+    frontend/applets/web_browser.h
     frontend/emu_window.cpp
     frontend/emu_window.h
     frontend/framebuffer_layout.cpp
     frontend/framebuffer_layout.h
     frontend/input.h
+    frontend/scope_acquire_window_context.cpp
+    frontend/scope_acquire_window_context.h
     gdbstub/gdbstub.cpp
     gdbstub/gdbstub.h
     hle/ipc.h
@@ -136,8 +140,6 @@ add_library(core STATIC
     hle/kernel/svc_wrap.h
     hle/kernel/thread.cpp
     hle/kernel/thread.h
-    hle/kernel/timer.cpp
-    hle/kernel/timer.h
     hle/kernel/vm_manager.cpp
     hle/kernel/vm_manager.h
     hle/kernel/wait_object.cpp
@@ -173,6 +175,8 @@ add_library(core STATIC
     hle/service/am/applets/software_keyboard.h
     hle/service/am/applets/stub_applet.cpp
     hle/service/am/applets/stub_applet.h
+    hle/service/am/applets/web_browser.cpp
+    hle/service/am/applets/web_browser.h
     hle/service/am/idle.cpp
     hle/service/am/idle.h
     hle/service/am/omm.cpp

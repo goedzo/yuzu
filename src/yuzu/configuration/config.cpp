@@ -370,6 +370,8 @@ void Config::ReadValues() {
     Settings::values.resolution_factor = qt_config->value("resolution_factor", 1.0).toFloat();
     Settings::values.use_frame_limit = qt_config->value("use_frame_limit", true).toBool();
     Settings::values.frame_limit = qt_config->value("frame_limit", 100).toInt();
+    Settings::values.use_disk_shader_cache =
+        qt_config->value("use_disk_shader_cache", false).toBool();
     Settings::values.use_accurate_gpu_emulation =
         qt_config->value("use_accurate_gpu_emulation", false).toBool();
 
@@ -419,11 +421,19 @@ void Config::ReadValues() {
 
     Settings::values.language_index = qt_config->value("language_index", 1).toInt();
 
-    const auto enabled = qt_config->value("rng_seed_enabled", false).toBool();
-    if (enabled) {
+    const auto rng_seed_enabled = qt_config->value("rng_seed_enabled", false).toBool();
+    if (rng_seed_enabled) {
         Settings::values.rng_seed = qt_config->value("rng_seed", 0).toULongLong();
     } else {
         Settings::values.rng_seed = std::nullopt;
+    }
+
+    const auto custom_rtc_enabled = qt_config->value("custom_rtc_enabled", false).toBool();
+    if (custom_rtc_enabled) {
+        Settings::values.custom_rtc =
+            std::chrono::seconds(qt_config->value("custom_rtc", 0).toULongLong());
+    } else {
+        Settings::values.custom_rtc = std::nullopt;
     }
 
     qt_config->endGroup();
@@ -621,6 +631,7 @@ void Config::SaveValues() {
     qt_config->setValue("resolution_factor", (double)Settings::values.resolution_factor);
     qt_config->setValue("use_frame_limit", Settings::values.use_frame_limit);
     qt_config->setValue("frame_limit", Settings::values.frame_limit);
+    qt_config->setValue("use_disk_shader_cache", Settings::values.use_disk_shader_cache);
     qt_config->setValue("use_accurate_gpu_emulation", Settings::values.use_accurate_gpu_emulation);
 
     // Cast to double because Qt's written float values are not human-readable
@@ -652,6 +663,11 @@ void Config::SaveValues() {
 
     qt_config->setValue("rng_seed_enabled", Settings::values.rng_seed.has_value());
     qt_config->setValue("rng_seed", Settings::values.rng_seed.value_or(0));
+
+    qt_config->setValue("custom_rtc_enabled", Settings::values.custom_rtc.has_value());
+    qt_config->setValue("custom_rtc",
+                        QVariant::fromValue<long long>(
+                            Settings::values.custom_rtc.value_or(std::chrono::seconds{}).count()));
 
     qt_config->endGroup();
 

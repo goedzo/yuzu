@@ -110,6 +110,10 @@ use_frame_limit =
 # 1 - 9999: Speed limit as a percentage of target game speed. 100 (default)
 frame_limit =
 
+# Whether to use disk based shader cache
+# 0 (default): Off, 1 : On
+use_disk_shader_cache =
+
 # Whether to use accurate GPU emulation
 # 0 (default): Off (fast), 1 : On (slow)
 use_accurate_gpu_emulation =
@@ -182,6 +186,12 @@ enable_nfc =
 # rng_seed will be ignored and randomly generated if rng_seed_enabled is false
 rng_seed_enabled =
 rng_seed =
+
+# Sets the current time (in seconds since 12:00 AM Jan 1, 1970) that will be used by the time service
+# This will auto-increment, with the time set being the time the game is started
+# This override will only occur if custom_rtc_enabled is true, otherwise the current time is used
+custom_rtc_enabled =
+custom_rtc =
 
 # Sets the account username, max length is 32 characters
 # yuzu (default)
