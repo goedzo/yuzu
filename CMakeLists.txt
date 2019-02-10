@@ -19,6 +19,8 @@ option(ENABLE_WEB_SERVICE "Enable web services (telemetry, etc.)" ON)
 
 option(YUZU_USE_BUNDLED_UNICORN "Build/Download bundled Unicorn" ON)
 
+option(YUZU_USE_QT_WEB_ENGINE "Use QtWebEngine for web applet implementation" OFF)
+
 option(ENABLE_CUBEB "Enables the cubeb audio backend" ON)
 
 option(USE_DISCORD_PRESENCE "Enables Discord Rich Presence" OFF)
@@ -302,7 +304,7 @@ endif()
 if (ENABLE_QT)
     if (YUZU_USE_BUNDLED_QT)
         if ((MSVC_VERSION GREATER_EQUAL 1910 AND MSVC_VERSION LESS 1920) AND ARCHITECTURE_x86_64)
-            set(QT_VER qt-5.10.0-msvc2015_64)
+            set(QT_VER qt-5.12.0-msvc2017_64)
         else()
             message(FATAL_ERROR "No bundled Qt binaries for your toolchain. Disable YUZU_USE_BUNDLED_QT and provide your own.")
         endif()
@@ -319,6 +321,10 @@ if (ENABLE_QT)
     endif()
 
     find_package(Qt5 REQUIRED COMPONENTS Widgets OpenGL ${QT_PREFIX_HINT})
+
+    if (YUZU_USE_QT_WEB_ENGINE)
+        find_package(Qt5 REQUIRED COMPONENTS WebEngineCore WebEngineWidgets ${QT_PREFIX_HINT})
+    endif ()
 endif()
 
 # Platform-specific library requirements
@@ -412,19 +418,6 @@ function(create_target_directory_groups target_name)
         source_group("${group_name}" FILES "${file_name}")
     endforeach()
 endfunction()
-
-# Gets a UTC timstamp and sets the provided variable to it
-function(get_timestamp _var)
-    string(TIMESTAMP timestamp UTC)
-    set(${_var} "${timestamp}" PARENT_SCOPE)
-endfunction()
-
-# generate git/build information
-include(GetGitRevisionDescription)
-get_git_head_revision(GIT_REF_SPEC GIT_REV)
-git_describe(GIT_DESC --always --long --dirty)
-git_branch_name(GIT_BRANCH)
-get_timestamp(BUILD_DATE)
 
 enable_testing()
 add_subdirectory(externals)

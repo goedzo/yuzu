@@ -2,23 +2,19 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include <algorithm>
+#include <array>
+#include <chrono>
+#include <optional>
+
 #include <QFileDialog>
 #include <QGraphicsItem>
-#include <QGraphicsScene>
-#include <QHeaderView>
 #include <QMessageBox>
-#include <QStandardItemModel>
-#include <QTreeView>
-#include <QVBoxLayout>
 #include "common/assert.h"
 #include "common/file_util.h"
-#include "common/string_util.h"
 #include "core/core.h"
 #include "core/settings.h"
 #include "ui_configure_system.h"
 #include "yuzu/configuration/configure_system.h"
-#include "yuzu/util/limitable_input_dialog.h"
 
 namespace {
 constexpr std::array<int, 12> days_in_month = {{
@@ -51,6 +47,12 @@ ConfigureSystem::ConfigureSystem(QWidget* parent) : QWidget(parent), ui(new Ui::
             ui->rng_seed_edit->setText(QStringLiteral("00000000"));
     });
 
+    connect(ui->custom_rtc_checkbox, &QCheckBox::stateChanged, this, [this](bool checked) {
+        ui->custom_rtc_edit->setEnabled(checked);
+        if (!checked)
+            ui->custom_rtc_edit->setDateTime(QDateTime::currentDateTime());
+    });
+
     this->setConfiguration();
 }
 
@@ -67,6 +69,13 @@ void ConfigureSystem::setConfiguration() {
     const auto rng_seed =
         QString("%1").arg(Settings::values.rng_seed.value_or(0), 8, 16, QLatin1Char{'0'}).toUpper();
     ui->rng_seed_edit->setText(rng_seed);
+
+    ui->custom_rtc_checkbox->setChecked(Settings::values.custom_rtc.has_value());
+    ui->custom_rtc_edit->setEnabled(Settings::values.custom_rtc.has_value());
+
+    const auto rtc_time = Settings::values.custom_rtc.value_or(
+        std::chrono::seconds(QDateTime::currentSecsSinceEpoch()));
+    ui->custom_rtc_edit->setDateTime(QDateTime::fromSecsSinceEpoch(rtc_time.count()));
 }
 
 void ConfigureSystem::ReadSystemSettings() {}
@@ -81,6 +90,12 @@ void ConfigureSystem::applyConfiguration() {
         Settings::values.rng_seed = ui->rng_seed_edit->text().toULongLong(nullptr, 16);
     else
         Settings::values.rng_seed = std::nullopt;
+
+    if (ui->custom_rtc_checkbox->isChecked())
+        Settings::values.custom_rtc =
+            std::chrono::seconds(ui->custom_rtc_edit->dateTime().toSecsSinceEpoch());
+    else
+        Settings::values.custom_rtc = std::nullopt;
 
     Settings::Apply();
 }
