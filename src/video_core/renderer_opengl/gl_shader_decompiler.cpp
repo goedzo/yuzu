@@ -5,7 +5,9 @@
 #include <array>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
+#include <vector>
 
 #include <fmt/format.h>
 
@@ -20,6 +22,7 @@
 namespace OpenGL::GLShader {
 
 using Tegra::Shader::Attribute;
+using Tegra::Shader::AttributeUse;
 using Tegra::Shader::Header;
 using Tegra::Shader::IpaInterpMode;
 using Tegra::Shader::IpaMode;
@@ -288,34 +291,22 @@ private:
         code.AddNewLine();
     }
 
-    std::string GetInputFlags(const IpaMode& input_mode) {
-        const IpaSampleMode sample_mode = input_mode.sampling_mode;
-        const IpaInterpMode interp_mode = input_mode.interpolation_mode;
+    std::string GetInputFlags(AttributeUse attribute) {
         std::string out;
 
-        switch (interp_mode) {
-        case IpaInterpMode::Flat:
+        switch (attribute) {
+        case AttributeUse::Constant:
             out += "flat ";
             break;
-        case IpaInterpMode::Linear:
+        case AttributeUse::ScreenLinear:
             out += "noperspective ";
             break;
-        case IpaInterpMode::Perspective:
+        case AttributeUse::Perspective:
             // Default, Smooth
             break;
         default:
-            UNIMPLEMENTED_MSG("Unhandled IPA interp mode: {}", static_cast<u32>(interp_mode));
-        }
-        switch (sample_mode) {
-        case IpaSampleMode::Centroid:
-            // It can be implemented with the "centroid " keyword in GLSL
-            UNIMPLEMENTED_MSG("Unimplemented IPA sampler mode centroid");
-            break;
-        case IpaSampleMode::Default:
-            // Default, n/a
-            break;
-        default:
-            UNIMPLEMENTED_MSG("Unimplemented IPA sampler mode: {}", static_cast<u32>(sample_mode));
+            LOG_CRITICAL(HW_GPU, "Unused attribute being fetched");
+            UNREACHABLE();
         }
         return out;
     }
@@ -324,15 +315,10 @@ private:
         const auto& attributes = ir.GetInputAttributes();
         for (const auto element : attributes) {
             const Attribute::Index index = element.first;
-            const IpaMode& input_mode = *element.second.begin();
             if (index < Attribute::Index::Attribute_0 || index > Attribute::Index::Attribute_31) {
                 // Skip when it's not a generic attribute
                 continue;
             }
-
-            ASSERT(element.second.size() > 0);
-            UNIMPLEMENTED_IF_MSG(element.second.size() > 1,
-                                 "Multiple input flag modes are not supported in GLSL");
 
             // TODO(bunnei): Use proper number of elements for these
             u32 idx = static_cast<u32>(index) - static_cast<u32>(Attribute::Index::Attribute_0);
@@ -345,8 +331,14 @@ private:
             if (stage == ShaderStage::Geometry) {
                 attr = "gs_" + attr + "[]";
             }
-            code.AddLine("layout (location = " + std::to_string(idx) + ") " +
-                         GetInputFlags(input_mode) + "in vec4 " + attr + ';');
+            std::string suffix;
+            if (stage == ShaderStage::Fragment) {
+                const auto input_mode =
+                    header.ps.GetAttributeUse(idx - GENERIC_VARYING_START_LOCATION);
+                suffix = GetInputFlags(input_mode);
+            }
+            code.AddLine("layout (location = " + std::to_string(idx) + ") " + suffix + "in vec4 " +
+                         attr + ';');
         }
         if (!attributes.empty())
             code.AddNewLine();
@@ -616,17 +608,8 @@ private:
 
     std::string VisitOperand(Operation operation, std::size_t operand_index, Type type) {
         std::string value = VisitOperand(operation, operand_index);
-
         switch (type) {
-        case Type::Bool:
-        case Type::Bool2:
-        case Type::Float:
-            return value;
-        case Type::Int:
-            return "ftoi(" + value + ')';
-        case Type::Uint:
-            return "ftou(" + value + ')';
-        case Type::HalfFloat:
+        case Type::HalfFloat: {
             const auto half_meta = std::get_if<MetaHalfArithmetic>(&operation.GetMeta());
             if (!half_meta) {
                 value = "toHalf2(" + value + ')';
@@ -643,6 +626,26 @@ private:
                 return "vec2(toHalf2(" + value + ")[1])";
             }
         }
+        default:
+            return CastOperand(value, type);
+        }
+    }
+
+    std::string CastOperand(const std::string& value, Type type) const {
+        switch (type) {
+        case Type::Bool:
+        case Type::Bool2:
+        case Type::Float:
+            return value;
+        case Type::Int:
+            return "ftoi(" + value + ')';
+        case Type::Uint:
+            return "ftou(" + value + ')';
+        case Type::HalfFloat:
+            // Can't be handled as a stand-alone value
+            UNREACHABLE();
+            return value;
+        }
         UNREACHABLE();
         return value;
     }
@@ -650,6 +653,7 @@ private:
     std::string BitwiseCastResult(std::string value, Type type, bool needs_parenthesis = false) {
         switch (type) {
         case Type::Bool:
+        case Type::Bool2:
         case Type::Float:
             if (needs_parenthesis) {
                 return '(' + value + ')';
@@ -715,51 +719,68 @@ private:
     }
 
     std::string GenerateTexture(Operation operation, const std::string& func,
-                                bool is_extra_int = false) {
+                                const std::vector<std::pair<Type, Node>>& extras) {
         constexpr std::array<const char*, 4> coord_constructors = {"float", "vec2", "vec3", "vec4"};
 
         const auto meta = std::get_if<MetaTexture>(&operation.GetMeta());
-        const auto count = static_cast<u32>(operation.GetOperandsCount());
         ASSERT(meta);
+
+        const std::size_t count = operation.GetOperandsCount();
+        const bool has_array = meta->sampler.IsArray();
+        const bool has_shadow = meta->sampler.IsShadow();
 
         std::string expr = func;
         expr += '(';
         expr += GetSampler(meta->sampler);
         expr += ", ";
 
-        expr += coord_constructors[meta->coords_count - 1];
+        expr += coord_constructors.at(count + (has_array ? 1 : 0) + (has_shadow ? 1 : 0) - 1);
         expr += '(';
-        for (u32 i = 0; i < count; ++i) {
-            const bool is_extra = i >= meta->coords_count;
-            const bool is_array = i == meta->array_index;
+        for (std::size_t i = 0; i < count; ++i) {
+            expr += Visit(operation[i]);
 
-            std::string operand = [&]() {
-                if (is_extra && is_extra_int) {
-                    if (const auto immediate = std::get_if<ImmediateNode>(operation[i])) {
-                        return std::to_string(static_cast<s32>(immediate->GetValue()));
-                    } else {
-                        return "ftoi(" + Visit(operation[i]) + ')';
-                    }
-                } else {
-                    return Visit(operation[i]);
-                }
-            }();
-            if (is_array) {
-                ASSERT(!is_extra);
-                operand = "float(ftoi(" + operand + "))";
-            }
-
-            expr += operand;
-
-            if (i + 1 == meta->coords_count) {
-                expr += ')';
-            }
-            if (i + 1 < count) {
+            const std::size_t next = i + 1;
+            if (next < count)
                 expr += ", ";
-            }
+        }
+        if (has_array) {
+            expr += ", float(ftoi(" + Visit(meta->array) + "))";
+        }
+        if (has_shadow) {
+            expr += ", " + Visit(meta->depth_compare);
         }
         expr += ')';
-        return expr;
+
+        for (const auto& extra_pair : extras) {
+            const auto [type, operand] = extra_pair;
+            if (operand == nullptr) {
+                continue;
+            }
+            expr += ", ";
+
+            switch (type) {
+            case Type::Int:
+                if (const auto immediate = std::get_if<ImmediateNode>(operand)) {
+                    // Inline the string as an immediate integer in GLSL (some extra arguments are
+                    // required to be constant)
+                    expr += std::to_string(static_cast<s32>(immediate->GetValue()));
+                } else {
+                    expr += "ftoi(" + Visit(operand) + ')';
+                }
+                break;
+            case Type::Float:
+                expr += Visit(operand);
+                break;
+            default: {
+                const auto type_int = static_cast<u32>(type);
+                UNIMPLEMENTED_MSG("Unimplemented extra type={}", type_int);
+                expr += '0';
+                break;
+            }
+            }
+        }
+
+        return expr + ')';
     }
 
     std::string Assign(Operation operation) {
@@ -1134,37 +1155,38 @@ private:
                                   Type::HalfFloat);
     }
 
-    std::string F4Texture(Operation operation) {
+    std::string Texture(Operation operation) {
         const auto meta = std::get_if<MetaTexture>(&operation.GetMeta());
         ASSERT(meta);
 
-        std::string expr = GenerateTexture(operation, "texture");
+        std::string expr = GenerateTexture(operation, "texture", {{Type::Float, meta->bias}});
         if (meta->sampler.IsShadow()) {
             expr = "vec4(" + expr + ')';
         }
         return expr + GetSwizzle(meta->element);
     }
 
-    std::string F4TextureLod(Operation operation) {
+    std::string TextureLod(Operation operation) {
         const auto meta = std::get_if<MetaTexture>(&operation.GetMeta());
         ASSERT(meta);
 
-        std::string expr = GenerateTexture(operation, "textureLod");
+        std::string expr = GenerateTexture(operation, "textureLod", {{Type::Float, meta->lod}});
         if (meta->sampler.IsShadow()) {
             expr = "vec4(" + expr + ')';
         }
         return expr + GetSwizzle(meta->element);
     }
 
-    std::string F4TextureGather(Operation operation) {
+    std::string TextureGather(Operation operation) {
         const auto meta = std::get_if<MetaTexture>(&operation.GetMeta());
         ASSERT(meta);
 
-        return GenerateTexture(operation, "textureGather", !meta->sampler.IsShadow()) +
+        const auto type = meta->sampler.IsShadow() ? Type::Float : Type::Int;
+        return GenerateTexture(operation, "textureGather", {{type, meta->component}}) +
                GetSwizzle(meta->element);
     }
 
-    std::string F4TextureQueryDimensions(Operation operation) {
+    std::string TextureQueryDimensions(Operation operation) {
         const auto meta = std::get_if<MetaTexture>(&operation.GetMeta());
         ASSERT(meta);
 
@@ -1184,40 +1206,44 @@ private:
         return "0";
     }
 
-    std::string F4TextureQueryLod(Operation operation) {
+    std::string TextureQueryLod(Operation operation) {
         const auto meta = std::get_if<MetaTexture>(&operation.GetMeta());
         ASSERT(meta);
 
         if (meta->element < 2) {
-            return "itof(int((" + GenerateTexture(operation, "textureQueryLod") + " * vec2(256))" +
-                   GetSwizzle(meta->element) + "))";
+            return "itof(int((" + GenerateTexture(operation, "textureQueryLod", {}) +
+                   " * vec2(256))" + GetSwizzle(meta->element) + "))";
         }
         return "0";
     }
 
-    std::string F4TexelFetch(Operation operation) {
+    std::string TexelFetch(Operation operation) {
         constexpr std::array<const char*, 4> constructors = {"int", "ivec2", "ivec3", "ivec4"};
         const auto meta = std::get_if<MetaTexture>(&operation.GetMeta());
-        const auto count = static_cast<u32>(operation.GetOperandsCount());
         ASSERT(meta);
+        UNIMPLEMENTED_IF(meta->sampler.IsArray());
+        const std::size_t count = operation.GetOperandsCount();
 
         std::string expr = "texelFetch(";
         expr += GetSampler(meta->sampler);
         expr += ", ";
 
-        expr += constructors[meta->coords_count - 1];
+        expr += constructors.at(operation.GetOperandsCount() - 1);
         expr += '(';
-        for (u32 i = 0; i < count; ++i) {
+        for (std::size_t i = 0; i < count; ++i) {
             expr += VisitOperand(operation, i, Type::Int);
-
-            if (i + 1 == meta->coords_count) {
+            const std::size_t next = i + 1;
+            if (next == count)
                 expr += ')';
-            }
-            if (i + 1 < count) {
+            else if (next < count)
                 expr += ", ";
-            }
+        }
+        if (meta->lod) {
+            expr += ", ";
+            expr += CastOperand(Visit(meta->lod), Type::Int);
         }
         expr += ')';
+
         return expr + GetSwizzle(meta->element);
     }
 
@@ -1454,12 +1480,12 @@ private:
         &GLSLDecompiler::Logical2HNotEqual,
         &GLSLDecompiler::Logical2HGreaterEqual,
 
-        &GLSLDecompiler::F4Texture,
-        &GLSLDecompiler::F4TextureLod,
-        &GLSLDecompiler::F4TextureGather,
-        &GLSLDecompiler::F4TextureQueryDimensions,
-        &GLSLDecompiler::F4TextureQueryLod,
-        &GLSLDecompiler::F4TexelFetch,
+        &GLSLDecompiler::Texture,
+        &GLSLDecompiler::TextureLod,
+        &GLSLDecompiler::TextureGather,
+        &GLSLDecompiler::TextureQueryDimensions,
+        &GLSLDecompiler::TextureQueryLod,
+        &GLSLDecompiler::TexelFetch,
 
         &GLSLDecompiler::Branch,
         &GLSLDecompiler::PushFlowStack,

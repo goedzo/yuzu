@@ -11,6 +11,7 @@
 #endif
 #include "core/arm/exclusive_monitor.h"
 #include "core/arm/unicorn/arm_unicorn.h"
+#include "core/core.h"
 #include "core/core_cpu.h"
 #include "core/core_timing.h"
 #include "core/hle/kernel/scheduler.h"
@@ -49,20 +50,21 @@ bool CpuBarrier::Rendezvous() {
     return false;
 }
 
-Cpu::Cpu(ExclusiveMonitor& exclusive_monitor, CpuBarrier& cpu_barrier, std::size_t core_index)
-    : cpu_barrier{cpu_barrier}, core_index{core_index} {
+Cpu::Cpu(System& system, ExclusiveMonitor& exclusive_monitor, CpuBarrier& cpu_barrier,
+         std::size_t core_index)
+    : cpu_barrier{cpu_barrier}, core_timing{system.CoreTiming()}, core_index{core_index} {
     if (Settings::values.use_cpu_jit) {
 #ifdef ARCHITECTURE_x86_64
-        arm_interface = std::make_unique<ARM_Dynarmic>(exclusive_monitor, core_index);
+        arm_interface = std::make_unique<ARM_Dynarmic>(core_timing, exclusive_monitor, core_index);
 #else
         arm_interface = std::make_unique<ARM_Unicorn>();
         LOG_WARNING(Core, "CPU JIT requested, but Dynarmic not available");
 #endif
     } else {
-        arm_interface = std::make_unique<ARM_Unicorn>();
+        arm_interface = std::make_unique<ARM_Unicorn>(core_timing);
     }
 
-    scheduler = std::make_unique<Kernel::Scheduler>(*arm_interface);
+    scheduler = std::make_unique<Kernel::Scheduler>(system, *arm_interface);
 }
 
 Cpu::~Cpu() = default;
@@ -93,14 +95,14 @@ void Cpu::RunLoop(bool tight_loop) {
 
         if (IsMainCore()) {
             // TODO(Subv): Only let CoreTiming idle if all 4 cores are idling.
-            CoreTiming::Idle();
-            CoreTiming::Advance();
+            core_timing.Idle();
+            core_timing.Advance();
         }
 
         PrepareReschedule();
     } else {
         if (IsMainCore()) {
-            CoreTiming::Advance();
+            core_timing.Advance();
         }
 
         if (tight_loop) {

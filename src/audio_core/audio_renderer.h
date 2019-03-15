@@ -14,6 +14,10 @@
 #include "common/swap.h"
 #include "core/hle/kernel/object.h"
 
+namespace Core::Timing {
+class CoreTiming;
+}
+
 namespace Kernel {
 class WritableEvent;
 }
@@ -42,16 +46,18 @@ struct AudioRendererParameter {
     u32_le sample_rate;
     u32_le sample_count;
     u32_le mix_buffer_count;
-    u32_le unknown_c;
+    u32_le submix_count;
     u32_le voice_count;
     u32_le sink_count;
     u32_le effect_count;
-    u32_le unknown_1c;
-    u8 unknown_20;
-    INSERT_PADDING_BYTES(3);
+    u32_le performance_frame_count;
+    u8 is_voice_drop_enabled;
+    u8 unknown_21;
+    u8 unknown_22;
+    u8 execution_mode;
     u32_le splitter_count;
-    u32_le unknown_2c;
-    INSERT_PADDING_WORDS(1);
+    u32_le num_splitter_send_channels;
+    u32_le unknown_30;
     u32_le revision;
 };
 static_assert(sizeof(AudioRendererParameter) == 52, "AudioRendererParameter is an invalid size");
@@ -208,7 +214,7 @@ static_assert(sizeof(UpdateDataHeader) == 0x40, "UpdateDataHeader has wrong size
 
 class AudioRenderer {
 public:
-    AudioRenderer(AudioRendererParameter params,
+    AudioRenderer(Core::Timing::CoreTiming& core_timing, AudioRendererParameter params,
                   Kernel::SharedPtr<Kernel::WritableEvent> buffer_event);
     ~AudioRenderer();
 

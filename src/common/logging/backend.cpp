@@ -39,10 +39,10 @@ public:
     Impl(Impl const&) = delete;
     const Impl& operator=(Impl const&) = delete;
 
-    void PushEntry(Entry e) {
-        std::lock_guard<std::mutex> lock(message_mutex);
-        message_queue.Push(std::move(e));
-        message_cv.notify_one();
+    void PushEntry(Class log_class, Level log_level, const char* filename, unsigned int line_num,
+                   const char* function, std::string message) {
+        message_queue.Push(
+            CreateEntry(log_class, log_level, filename, line_num, function, std::move(message)));
     }
 
     void AddBackend(std::unique_ptr<Backend> backend) {
@@ -86,15 +86,13 @@ private:
                 }
             };
             while (true) {
-                {
-                    std::unique_lock<std::mutex> lock(message_mutex);
-                    message_cv.wait(lock, [&] { return !running || message_queue.Pop(entry); });
-                }
-                if (!running) {
+                entry = message_queue.PopWait();
+                if (entry.final_entry) {
                     break;
                 }
                 write_logs(entry);
             }
+
             // Drain the logging queue. Only writes out up to MAX_LOGS_TO_WRITE to prevent a case
             // where a system is repeatedly spamming logs even on close.
             const int MAX_LOGS_TO_WRITE = filter.IsDebug() ? INT_MAX : 100;
@@ -106,18 +104,36 @@ private:
     }
 
     ~Impl() {
-        running = false;
-        message_cv.notify_one();
+        Entry entry;
+        entry.final_entry = true;
+        message_queue.Push(entry);
         backend_thread.join();
     }
 
-    std::atomic_bool running{true};
-    std::mutex message_mutex, writing_mutex;
-    std::condition_variable message_cv;
+    Entry CreateEntry(Class log_class, Level log_level, const char* filename, unsigned int line_nr,
+                      const char* function, std::string message) const {
+        using std::chrono::duration_cast;
+        using std::chrono::steady_clock;
+
+        Entry entry;
+        entry.timestamp =
+            duration_cast<std::chrono::microseconds>(steady_clock::now() - time_origin);
+        entry.log_class = log_class;
+        entry.log_level = log_level;
+        entry.filename = Common::TrimSourcePath(filename);
+        entry.line_num = line_nr;
+        entry.function = function;
+        entry.message = std::move(message);
+
+        return entry;
+    }
+
+    std::mutex writing_mutex;
     std::thread backend_thread;
     std::vector<std::unique_ptr<Backend>> backends;
     Common::MPSCQueue<Log::Entry> message_queue;
     Filter filter;
+    std::chrono::steady_clock::time_point time_origin{std::chrono::steady_clock::now()};
 };
 
 void ConsoleBackend::Write(const Entry& entry) {
@@ -232,6 +248,7 @@ void DebuggerBackend::Write(const Entry& entry) {
     CLS(Render)                                                                                    \
     SUB(Render, Software)                                                                          \
     SUB(Render, OpenGL)                                                                            \
+    SUB(Render, Vulkan)                                                                            \
     CLS(Audio)                                                                                     \
     SUB(Audio, DSP)                                                                                \
     SUB(Audio, Sink)                                                                               \
@@ -275,25 +292,6 @@ const char* GetLevelName(Level log_level) {
 #undef LVL
 }
 
-Entry CreateEntry(Class log_class, Level log_level, const char* filename, unsigned int line_nr,
-                  const char* function, std::string message) {
-    using std::chrono::duration_cast;
-    using std::chrono::steady_clock;
-
-    static steady_clock::time_point time_origin = steady_clock::now();
-
-    Entry entry;
-    entry.timestamp = duration_cast<std::chrono::microseconds>(steady_clock::now() - time_origin);
-    entry.log_class = log_class;
-    entry.log_level = log_level;
-    entry.filename = Common::TrimSourcePath(filename);
-    entry.line_num = line_nr;
-    entry.function = function;
-    entry.message = std::move(message);
-
-    return entry;
-}
-
 void SetGlobalFilter(const Filter& filter) {
     Impl::Instance().SetGlobalFilter(filter);
 }
@@ -318,9 +316,7 @@ void FmtLogMessageImpl(Class log_class, Level log_level, const char* filename,
     if (!filter.CheckMessage(log_class, log_level))
         return;
 
-    Entry entry =
-        CreateEntry(log_class, log_level, filename, line_num, function, fmt::vformat(format, args));
-
-    instance.PushEntry(std::move(entry));
+    instance.PushEntry(log_class, log_level, filename, line_num, function,
+                       fmt::vformat(format, args));
 }
 } // namespace Log

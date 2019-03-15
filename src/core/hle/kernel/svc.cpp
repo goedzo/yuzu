@@ -20,6 +20,7 @@
 #include "core/hle/kernel/address_arbiter.h"
 #include "core/hle/kernel/client_port.h"
 #include "core/hle/kernel/client_session.h"
+#include "core/hle/kernel/errors.h"
 #include "core/hle/kernel/handle_table.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/mutex.h"
@@ -45,23 +46,6 @@ namespace {
 // or if the given size is zero.
 constexpr bool IsValidAddressRange(VAddr address, u64 size) {
     return address + size > address;
-}
-
-// Checks if a given address range lies within a larger address range.
-constexpr bool IsInsideAddressRange(VAddr address, u64 size, VAddr address_range_begin,
-                                    VAddr address_range_end) {
-    const VAddr end_address = address + size - 1;
-    return address_range_begin <= address && end_address <= address_range_end - 1;
-}
-
-bool IsInsideAddressSpace(const VMManager& vm, VAddr address, u64 size) {
-    return IsInsideAddressRange(address, size, vm.GetAddressSpaceBaseAddress(),
-                                vm.GetAddressSpaceEndAddress());
-}
-
-bool IsInsideNewMapRegion(const VMManager& vm, VAddr address, u64 size) {
-    return IsInsideAddressRange(address, size, vm.GetNewMapRegionBaseAddress(),
-                                vm.GetNewMapRegionEndAddress());
 }
 
 // 8 GiB
@@ -105,14 +89,14 @@ ResultCode MapUnmapMemorySanityChecks(const VMManager& vm_manager, VAddr dst_add
         return ERR_INVALID_ADDRESS_STATE;
     }
 
-    if (!IsInsideAddressSpace(vm_manager, src_addr, size)) {
+    if (!vm_manager.IsWithinAddressSpace(src_addr, size)) {
         LOG_ERROR(Kernel_SVC,
                   "Source is not within the address space, addr=0x{:016X}, size=0x{:016X}",
                   src_addr, size);
         return ERR_INVALID_ADDRESS_STATE;
     }
 
-    if (!IsInsideNewMapRegion(vm_manager, dst_addr, size)) {
+    if (!vm_manager.IsWithinNewMapRegion(dst_addr, size)) {
         LOG_ERROR(Kernel_SVC,
                   "Destination is not within the new map region, addr=0x{:016X}, size=0x{:016X}",
                   dst_addr, size);
@@ -238,7 +222,7 @@ static ResultCode SetMemoryPermission(VAddr addr, u64 size, u32 prot) {
     auto* const current_process = Core::CurrentProcess();
     auto& vm_manager = current_process->VMManager();
 
-    if (!IsInsideAddressSpace(vm_manager, addr, size)) {
+    if (!vm_manager.IsWithinAddressSpace(addr, size)) {
         LOG_ERROR(Kernel_SVC,
                   "Source is not within the address space, addr=0x{:016X}, size=0x{:016X}", addr,
                   size);
@@ -299,7 +283,7 @@ static ResultCode SetMemoryAttribute(VAddr address, u64 size, u32 mask, u32 attr
     }
 
     auto& vm_manager = Core::CurrentProcess()->VMManager();
-    if (!IsInsideAddressSpace(vm_manager, address, size)) {
+    if (!vm_manager.IsWithinAddressSpace(address, size)) {
         LOG_ERROR(Kernel_SVC,
                   "Given address (0x{:016X}) is outside the bounds of the address space.", address);
         return ERR_INVALID_ADDRESS_STATE;
@@ -918,6 +902,7 @@ static ResultCode GetInfo(u64* result, u64 info_id, u64 handle, u64 info_sub_id)
         }
 
         const auto& system = Core::System::GetInstance();
+        const auto& core_timing = system.CoreTiming();
         const auto& scheduler = system.CurrentScheduler();
         const auto* const current_thread = scheduler.GetCurrentThread();
         const bool same_thread = current_thread == thread;
@@ -927,9 +912,9 @@ static ResultCode GetInfo(u64* result, u64 info_id, u64 handle, u64 info_sub_id)
         if (same_thread && info_sub_id == 0xFFFFFFFFFFFFFFFF) {
             const u64 thread_ticks = current_thread->GetTotalCPUTimeTicks();
 
-            out_ticks = thread_ticks + (CoreTiming::GetTicks() - prev_ctx_ticks);
+            out_ticks = thread_ticks + (core_timing.GetTicks() - prev_ctx_ticks);
         } else if (same_thread && info_sub_id == system.CurrentCoreIndex()) {
-            out_ticks = CoreTiming::GetTicks() - prev_ctx_ticks;
+            out_ticks = core_timing.GetTicks() - prev_ctx_ticks;
         }
 
         *result = out_ticks;
@@ -1494,20 +1479,10 @@ static ResultCode WaitForAddress(VAddr address, u32 type, s32 value, s64 timeout
         return ERR_INVALID_ADDRESS;
     }
 
-    switch (static_cast<AddressArbiter::ArbitrationType>(type)) {
-    case AddressArbiter::ArbitrationType::WaitIfLessThan:
-        return AddressArbiter::WaitForAddressIfLessThan(address, value, timeout, false);
-    case AddressArbiter::ArbitrationType::DecrementAndWaitIfLessThan:
-        return AddressArbiter::WaitForAddressIfLessThan(address, value, timeout, true);
-    case AddressArbiter::ArbitrationType::WaitIfEqual:
-        return AddressArbiter::WaitForAddressIfEqual(address, value, timeout);
-    default:
-        LOG_ERROR(Kernel_SVC,
-                  "Invalid arbitration type, expected WaitIfLessThan, DecrementAndWaitIfLessThan "
-                  "or WaitIfEqual but got {}",
-                  type);
-        return ERR_INVALID_ENUM_VALUE;
-    }
+    const auto arbitration_type = static_cast<AddressArbiter::ArbitrationType>(type);
+    auto& address_arbiter =
+        Core::System::GetInstance().Kernel().CurrentProcess()->GetAddressArbiter();
+    return address_arbiter.WaitForAddress(address, arbitration_type, value, timeout);
 }
 
 // Signals to an address (via Address Arbiter)
@@ -1525,31 +1500,21 @@ static ResultCode SignalToAddress(VAddr address, u32 type, s32 value, s32 num_to
         return ERR_INVALID_ADDRESS;
     }
 
-    switch (static_cast<AddressArbiter::SignalType>(type)) {
-    case AddressArbiter::SignalType::Signal:
-        return AddressArbiter::SignalToAddress(address, num_to_wake);
-    case AddressArbiter::SignalType::IncrementAndSignalIfEqual:
-        return AddressArbiter::IncrementAndSignalToAddressIfEqual(address, value, num_to_wake);
-    case AddressArbiter::SignalType::ModifyByWaitingCountAndSignalIfEqual:
-        return AddressArbiter::ModifyByWaitingCountAndSignalToAddressIfEqual(address, value,
-                                                                             num_to_wake);
-    default:
-        LOG_ERROR(Kernel_SVC,
-                  "Invalid signal type, expected Signal, IncrementAndSignalIfEqual "
-                  "or ModifyByWaitingCountAndSignalIfEqual but got {}",
-                  type);
-        return ERR_INVALID_ENUM_VALUE;
-    }
+    const auto signal_type = static_cast<AddressArbiter::SignalType>(type);
+    auto& address_arbiter =
+        Core::System::GetInstance().Kernel().CurrentProcess()->GetAddressArbiter();
+    return address_arbiter.SignalToAddress(address, signal_type, value, num_to_wake);
 }
 
 /// This returns the total CPU ticks elapsed since the CPU was powered-on
 static u64 GetSystemTick() {
     LOG_TRACE(Kernel_SVC, "called");
 
-    const u64 result{CoreTiming::GetTicks()};
+    auto& core_timing = Core::System::GetInstance().CoreTiming();
+    const u64 result{core_timing.GetTicks()};
 
     // Advance time to defeat dumb games that busy-wait for the frame to end.
-    CoreTiming::AddTicks(400);
+    core_timing.AddTicks(400);
 
     return result;
 }

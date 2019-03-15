@@ -3,21 +3,23 @@
 // Refer to the license.txt file included.
 
 #include "common/assert.h"
+#include "core/core.h"
 #include "core/core_timing.h"
 #include "core/memory.h"
 #include "video_core/engines/fermi_2d.h"
+#include "video_core/engines/kepler_compute.h"
 #include "video_core/engines/kepler_memory.h"
 #include "video_core/engines/maxwell_3d.h"
-#include "video_core/engines/maxwell_compute.h"
 #include "video_core/engines/maxwell_dma.h"
 #include "video_core/gpu.h"
-#include "video_core/rasterizer_interface.h"
+#include "video_core/renderer_base.h"
 
 namespace Tegra {
 
 u32 FramebufferConfig::BytesPerPixel(PixelFormat format) {
     switch (format) {
     case PixelFormat::ABGR8:
+    case PixelFormat::BGRA8:
         return 4;
     default:
         return 4;
@@ -26,14 +28,15 @@ u32 FramebufferConfig::BytesPerPixel(PixelFormat format) {
     UNREACHABLE();
 }
 
-GPU::GPU(VideoCore::RasterizerInterface& rasterizer) {
+GPU::GPU(Core::System& system, VideoCore::RendererBase& renderer) : renderer{renderer} {
+    auto& rasterizer{renderer.Rasterizer()};
     memory_manager = std::make_unique<Tegra::MemoryManager>();
     dma_pusher = std::make_unique<Tegra::DmaPusher>(*this);
-    maxwell_3d = std::make_unique<Engines::Maxwell3D>(rasterizer, *memory_manager);
+    maxwell_3d = std::make_unique<Engines::Maxwell3D>(system, rasterizer, *memory_manager);
     fermi_2d = std::make_unique<Engines::Fermi2D>(rasterizer, *memory_manager);
-    maxwell_compute = std::make_unique<Engines::MaxwellCompute>();
-    maxwell_dma = std::make_unique<Engines::MaxwellDMA>(rasterizer, *memory_manager);
-    kepler_memory = std::make_unique<Engines::KeplerMemory>(rasterizer, *memory_manager);
+    kepler_compute = std::make_unique<Engines::KeplerCompute>(*memory_manager);
+    maxwell_dma = std::make_unique<Engines::MaxwellDMA>(system, rasterizer, *memory_manager);
+    kepler_memory = std::make_unique<Engines::KeplerMemory>(system, rasterizer, *memory_manager);
 }
 
 GPU::~GPU() = default;
@@ -245,8 +248,8 @@ void GPU::CallEngineMethod(const MethodCall& method_call) {
     case EngineID::MAXWELL_B:
         maxwell_3d->CallMethod(method_call);
         break;
-    case EngineID::MAXWELL_COMPUTE_B:
-        maxwell_compute->CallMethod(method_call);
+    case EngineID::KEPLER_COMPUTE_B:
+        kepler_compute->CallMethod(method_call);
         break;
     case EngineID::MAXWELL_DMA_COPY_A:
         maxwell_dma->CallMethod(method_call);
@@ -282,7 +285,7 @@ void GPU::ProcessSemaphoreTriggerMethod() {
         block.sequence = regs.semaphore_sequence;
         // TODO(Kmather73): Generate a real GPU timestamp and write it here instead of
         // CoreTiming
-        block.timestamp = CoreTiming::GetTicks();
+        block.timestamp = Core::System::GetInstance().CoreTiming().GetTicks();
         Memory::WriteBlock(*address, &block, sizeof(block));
     } else {
         const auto address =

@@ -47,6 +47,10 @@ namespace VideoCore {
 class RendererBase;
 } // namespace VideoCore
 
+namespace Core::Timing {
+class CoreTiming;
+}
+
 namespace Core {
 
 class ARM_Interface;
@@ -205,6 +209,12 @@ public:
     /// Provides a constant pointer to the current process.
     const Kernel::Process* CurrentProcess() const;
 
+    /// Provides a reference to the core timing instance.
+    Timing::CoreTiming& CoreTiming();
+
+    /// Provides a constant reference to the core timing instance.
+    const Timing::CoreTiming& CoreTiming() const;
+
     /// Provides a reference to the kernel instance.
     Kernel::KernelCore& Kernel();
 
@@ -281,10 +291,6 @@ private:
 
 inline ARM_Interface& CurrentArmInterface() {
     return System::GetInstance().CurrentArmInterface();
-}
-
-inline TelemetrySession& Telemetry() {
-    return System::GetInstance().TelemetrySession();
 }
 
 inline Kernel::Process* CurrentProcess() {

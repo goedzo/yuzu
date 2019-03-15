@@ -89,8 +89,6 @@ PixelFormat PixelFormatFromDepthFormat(Tegra::DepthFormat format) {
 
 PixelFormat PixelFormatFromRenderTargetFormat(Tegra::RenderTargetFormat format) {
     switch (format) {
-        // TODO (Hexagon12): Converting SRGBA to RGBA is a hack and doesn't completely correct the
-        // gamma.
     case Tegra::RenderTargetFormat::RGBA8_SRGB:
         return PixelFormat::RGBA8_SRGB;
     case Tegra::RenderTargetFormat::RGBA8_UNORM:
@@ -426,6 +424,8 @@ PixelFormat PixelFormatFromGPUPixelFormat(Tegra::FramebufferConfig::PixelFormat 
     switch (format) {
     case Tegra::FramebufferConfig::PixelFormat::ABGR8:
         return PixelFormat::ABGR8U;
+    case Tegra::FramebufferConfig::PixelFormat::BGRA8:
+        return PixelFormat::BGRA8;
     default:
         LOG_CRITICAL(HW_GPU, "Unimplemented format={}", static_cast<u32>(format));
         UNREACHABLE();

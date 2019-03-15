@@ -107,7 +107,7 @@ RendererOpenGL::~RendererOpenGL() = default;
 void RendererOpenGL::SwapBuffers(
     std::optional<std::reference_wrapper<const Tegra::FramebufferConfig>> framebuffer) {
 
-    Core::System::GetInstance().GetPerfStats().EndSystemFrame();
+    system.GetPerfStats().EndSystemFrame();
 
     // Maintain the rasterizer's state as a priority
     OpenGLState prev_state = OpenGLState::GetCurState();
@@ -137,8 +137,8 @@ void RendererOpenGL::SwapBuffers(
 
     render_window.PollEvents();
 
-    Core::System::GetInstance().FrameLimiter().DoFrameLimiting(CoreTiming::GetGlobalTimeUs());
-    Core::System::GetInstance().GetPerfStats().BeginSystemFrame();
+    system.FrameLimiter().DoFrameLimiting(system.CoreTiming().GetGlobalTimeUs());
+    system.GetPerfStats().BeginSystemFrame();
 
     // Restore the rasterizer state
     prev_state.Apply();
@@ -167,9 +167,11 @@ void RendererOpenGL::LoadFBToScreenInfo(const Tegra::FramebufferConfig& framebuf
         Memory::RasterizerFlushVirtualRegion(framebuffer_addr, size_in_bytes,
                                              Memory::FlushMode::Flush);
 
-        VideoCore::MortonCopyPixels128(framebuffer.width, framebuffer.height, bytes_per_pixel, 4,
-                                       Memory::GetPointer(framebuffer_addr),
-                                       gl_framebuffer_data.data(), true);
+        constexpr u32 linear_bpp = 4;
+        VideoCore::MortonCopyPixels128(VideoCore::MortonSwizzleMode::MortonToLinear,
+                                       framebuffer.width, framebuffer.height, bytes_per_pixel,
+                                       linear_bpp, Memory::GetPointer(framebuffer_addr),
+                                       gl_framebuffer_data.data());
 
         glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(framebuffer.stride));
 
@@ -244,6 +246,21 @@ void RendererOpenGL::InitOpenGLObjects() {
     LoadColorToActiveGLTexture(0, 0, 0, 0, screen_info.texture);
 }
 
+void RendererOpenGL::AddTelemetryFields() {
+    const char* const gl_version{reinterpret_cast<char const*>(glGetString(GL_VERSION))};
+    const char* const gpu_vendor{reinterpret_cast<char const*>(glGetString(GL_VENDOR))};
+    const char* const gpu_model{reinterpret_cast<char const*>(glGetString(GL_RENDERER))};
+
+    LOG_INFO(Render_OpenGL, "GL_VERSION: {}", gl_version);
+    LOG_INFO(Render_OpenGL, "GL_VENDOR: {}", gpu_vendor);
+    LOG_INFO(Render_OpenGL, "GL_RENDERER: {}", gpu_model);
+
+    auto& telemetry_session = system.TelemetrySession();
+    telemetry_session.AddField(Telemetry::FieldType::UserSystem, "GPU_Vendor", gpu_vendor);
+    telemetry_session.AddField(Telemetry::FieldType::UserSystem, "GPU_Model", gpu_model);
+    telemetry_session.AddField(Telemetry::FieldType::UserSystem, "GPU_OpenGL_Version", gl_version);
+}
+
 void RendererOpenGL::CreateRasterizer() {
     if (rasterizer) {
         return;
@@ -257,6 +274,7 @@ void RendererOpenGL::ConfigureFramebufferTexture(TextureInfo& texture,
                                                  const Tegra::FramebufferConfig& framebuffer) {
     texture.width = framebuffer.width;
     texture.height = framebuffer.height;
+    texture.pixel_format = framebuffer.pixel_format;
 
     GLint internal_format;
     switch (framebuffer.pixel_format) {
@@ -380,7 +398,8 @@ void RendererOpenGL::CaptureScreenshot() {
     GLuint renderbuffer;
     glGenRenderbuffers(1, &renderbuffer);
     glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_RGB8, layout.width, layout.height);
+    glRenderbufferStorage(GL_RENDERBUFFER, state.GetsRGBUsed() ? GL_SRGB8 : GL_RGB8, layout.width,
+                          layout.height);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
 
     DrawScreen(layout);
@@ -464,17 +483,7 @@ bool RendererOpenGL::Init() {
         glDebugMessageCallback(DebugHandler, nullptr);
     }
 
-    const char* gl_version{reinterpret_cast<char const*>(glGetString(GL_VERSION))};
-    const char* gpu_vendor{reinterpret_cast<char const*>(glGetString(GL_VENDOR))};
-    const char* gpu_model{reinterpret_cast<char const*>(glGetString(GL_RENDERER))};
-
-    LOG_INFO(Render_OpenGL, "GL_VERSION: {}", gl_version);
-    LOG_INFO(Render_OpenGL, "GL_VENDOR: {}", gpu_vendor);
-    LOG_INFO(Render_OpenGL, "GL_RENDERER: {}", gpu_model);
-
-    Core::Telemetry().AddField(Telemetry::FieldType::UserSystem, "GPU_Vendor", gpu_vendor);
-    Core::Telemetry().AddField(Telemetry::FieldType::UserSystem, "GPU_Model", gpu_model);
-    Core::Telemetry().AddField(Telemetry::FieldType::UserSystem, "GPU_OpenGL_Version", gl_version);
+    AddTelemetryFields();
 
     if (!GLAD_GL_VERSION_4_3) {
         return false;

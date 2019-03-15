@@ -32,12 +32,12 @@ u32 Stream::GetNumChannels() const {
     return {};
 }
 
-Stream::Stream(u32 sample_rate, Format format, ReleaseCallback&& release_callback,
-               SinkStream& sink_stream, std::string&& name_)
+Stream::Stream(Core::Timing::CoreTiming& core_timing, u32 sample_rate, Format format,
+               ReleaseCallback&& release_callback, SinkStream& sink_stream, std::string&& name_)
     : sample_rate{sample_rate}, format{format}, release_callback{std::move(release_callback)},
-      sink_stream{sink_stream}, name{std::move(name_)} {
+      sink_stream{sink_stream}, core_timing{core_timing}, name{std::move(name_)} {
 
-    release_event = CoreTiming::RegisterEvent(
+    release_event = core_timing.RegisterEvent(
         name, [this](u64 userdata, int cycles_late) { ReleaseActiveBuffer(); });
 }
 
@@ -57,7 +57,7 @@ Stream::State Stream::GetState() const {
 
 s64 Stream::GetBufferReleaseCycles(const Buffer& buffer) const {
     const std::size_t num_samples{buffer.GetSamples().size() / GetNumChannels()};
-    return CoreTiming::usToCycles((static_cast<u64>(num_samples) * 1000000) / sample_rate);
+    return Core::Timing::usToCycles((static_cast<u64>(num_samples) * 1000000) / sample_rate);
 }
 
 static void VolumeAdjustSamples(std::vector<s16>& samples) {
@@ -95,11 +95,11 @@ void Stream::PlayNextBuffer() {
     active_buffer = queued_buffers.front();
     queued_buffers.pop();
 
-    VolumeAdjustSamples(active_buffer->Samples());
+    VolumeAdjustSamples(active_buffer->GetSamples());
 
     sink_stream.EnqueueSamples(GetNumChannels(), active_buffer->GetSamples());
 
-    CoreTiming::ScheduleEventThreadsafe(GetBufferReleaseCycles(*active_buffer), release_event, {});
+    core_timing.ScheduleEventThreadsafe(GetBufferReleaseCycles(*active_buffer), release_event, {});
 }
 
 void Stream::ReleaseActiveBuffer() {

@@ -11,12 +11,18 @@
 template <typename T>
 class ResultVal;
 
-namespace CoreTiming {
-struct EventType;
+namespace Core {
+class System;
 }
+
+namespace Core::Timing {
+class CoreTiming;
+struct EventType;
+} // namespace Core::Timing
 
 namespace Kernel {
 
+class AddressArbiter;
 class ClientPort;
 class HandleTable;
 class Process;
@@ -29,7 +35,14 @@ private:
     using NamedPortTable = std::unordered_map<std::string, SharedPtr<ClientPort>>;
 
 public:
-    KernelCore();
+    /// Constructs an instance of the kernel using the given System
+    /// instance as a context for any necessary system-related state,
+    /// such as threads, CPU core state, etc.
+    ///
+    /// @post After execution of the constructor, the provided System
+    ///       object *must* outlive the kernel instance itself.
+    ///
+    explicit KernelCore(Core::System& system);
     ~KernelCore();
 
     KernelCore(const KernelCore&) = delete;
@@ -89,7 +102,7 @@ private:
     u64 CreateNewThreadID();
 
     /// Retrieves the event type used for thread wakeup callbacks.
-    CoreTiming::EventType* ThreadWakeupCallbackEventType() const;
+    Core::Timing::EventType* ThreadWakeupCallbackEventType() const;
 
     /// Provides a reference to the thread wakeup callback handle table.
     Kernel::HandleTable& ThreadWakeupCallbackHandleTable();

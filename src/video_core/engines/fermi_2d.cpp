@@ -2,12 +2,11 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include "core/core.h"
-#include "core/memory.h"
+#include "common/assert.h"
+#include "common/logging/log.h"
+#include "common/math_util.h"
 #include "video_core/engines/fermi_2d.h"
-#include "video_core/engines/maxwell_3d.h"
 #include "video_core/rasterizer_interface.h"
-#include "video_core/textures/decoders.h"
 
 namespace Tegra::Engines {
 
@@ -44,10 +43,10 @@ void Fermi2D::HandleSurfaceCopy() {
     const u32 src_blit_y2{
         static_cast<u32>((regs.blit_src_y + (regs.blit_dst_height * regs.blit_dv_dy)) >> 32)};
 
-    const MathUtil::Rectangle<u32> src_rect{src_blit_x1, src_blit_y1, src_blit_x2, src_blit_y2};
-    const MathUtil::Rectangle<u32> dst_rect{regs.blit_dst_x, regs.blit_dst_y,
-                                            regs.blit_dst_x + regs.blit_dst_width,
-                                            regs.blit_dst_y + regs.blit_dst_height};
+    const Common::Rectangle<u32> src_rect{src_blit_x1, src_blit_y1, src_blit_x2, src_blit_y2};
+    const Common::Rectangle<u32> dst_rect{regs.blit_dst_x, regs.blit_dst_y,
+                                          regs.blit_dst_x + regs.blit_dst_width,
+                                          regs.blit_dst_y + regs.blit_dst_height};
 
     if (!rasterizer.AccelerateSurfaceCopy(regs.src, regs.dst, src_rect, dst_rect)) {
         UNIMPLEMENTED();

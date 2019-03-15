@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -14,9 +13,10 @@
 #include "common/common_types.h"
 #include "core/hle/kernel/object.h"
 
-namespace CoreTiming {
+namespace Core::Timing {
+class CoreTiming;
 struct EventType;
-}
+} // namespace Core::Timing
 
 namespace Kernel {
 class ReadableEvent;
@@ -25,34 +25,20 @@ class WritableEvent;
 
 namespace Service::Nvidia {
 class Module;
-}
+} // namespace Service::Nvidia
+
+namespace Service::VI {
+class Display;
+class Layer;
+} // namespace Service::VI
 
 namespace Service::NVFlinger {
 
 class BufferQueue;
 
-struct Layer {
-    Layer(u64 id, std::shared_ptr<BufferQueue> queue);
-    ~Layer();
-
-    u64 id;
-    std::shared_ptr<BufferQueue> buffer_queue;
-};
-
-struct Display {
-    Display(u64 id, std::string name);
-    ~Display();
-
-    u64 id;
-    std::string name;
-
-    std::vector<Layer> layers;
-    Kernel::EventPair vsync_event;
-};
-
 class NVFlinger final {
 public:
-    NVFlinger();
+    explicit NVFlinger(Core::Timing::CoreTiming& core_timing);
     ~NVFlinger();
 
     /// Sets the NVDrv module instance to use to send buffers to the GPU.
@@ -79,7 +65,10 @@ public:
     Kernel::SharedPtr<Kernel::ReadableEvent> FindVsyncEvent(u64 display_id) const;
 
     /// Obtains a buffer queue identified by the ID.
-    std::shared_ptr<BufferQueue> FindBufferQueue(u32 id) const;
+    BufferQueue& FindBufferQueue(u32 id);
+
+    /// Obtains a buffer queue identified by the ID.
+    const BufferQueue& FindBufferQueue(u32 id) const;
 
     /// Performs a composition request to the emulated nvidia GPU and triggers the vsync events when
     /// finished.
@@ -87,27 +76,21 @@ public:
 
 private:
     /// Finds the display identified by the specified ID.
-    Display* FindDisplay(u64 display_id);
+    VI::Display* FindDisplay(u64 display_id);
 
     /// Finds the display identified by the specified ID.
-    const Display* FindDisplay(u64 display_id) const;
+    const VI::Display* FindDisplay(u64 display_id) const;
 
     /// Finds the layer identified by the specified ID in the desired display.
-    Layer* FindLayer(u64 display_id, u64 layer_id);
+    VI::Layer* FindLayer(u64 display_id, u64 layer_id);
 
     /// Finds the layer identified by the specified ID in the desired display.
-    const Layer* FindLayer(u64 display_id, u64 layer_id) const;
+    const VI::Layer* FindLayer(u64 display_id, u64 layer_id) const;
 
     std::shared_ptr<Nvidia::Module> nvdrv;
 
-    std::array<Display, 5> displays{{
-        {0, "Default"},
-        {1, "External"},
-        {2, "Edid"},
-        {3, "Internal"},
-        {4, "Null"},
-    }};
-    std::vector<std::shared_ptr<BufferQueue>> buffer_queues;
+    std::vector<VI::Display> displays;
+    std::vector<BufferQueue> buffer_queues;
 
     /// Id to use for the next layer that is created, this counter is shared among all displays.
     u64 next_layer_id = 1;
@@ -115,8 +98,11 @@ private:
     /// layers.
     u32 next_buffer_queue_id = 1;
 
-    /// CoreTiming event that handles screen composition.
-    CoreTiming::EventType* composition_event;
+    /// Event that handles screen composition.
+    Core::Timing::EventType* composition_event;
+
+    /// Core timing instance for registering/unregistering the composition event.
+    Core::Timing::CoreTiming& core_timing;
 };
 
 } // namespace Service::NVFlinger

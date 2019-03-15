@@ -5,18 +5,24 @@ add_library(video_core STATIC
     debug_utils/debug_utils.h
     engines/fermi_2d.cpp
     engines/fermi_2d.h
+    engines/kepler_compute.cpp
+    engines/kepler_compute.h
     engines/kepler_memory.cpp
     engines/kepler_memory.h
     engines/maxwell_3d.cpp
     engines/maxwell_3d.h
-    engines/maxwell_compute.cpp
-    engines/maxwell_compute.h
     engines/maxwell_dma.cpp
     engines/maxwell_dma.h
     engines/shader_bytecode.h
     engines/shader_header.h
     gpu.cpp
     gpu.h
+    gpu_asynch.cpp
+    gpu_asynch.h
+    gpu_synch.cpp
+    gpu_synch.h
+    gpu_thread.cpp
+    gpu_thread.h
     macro_interpreter.cpp
     macro_interpreter.h
     memory_manager.cpp
@@ -74,6 +80,7 @@ add_library(video_core STATIC
     shader/decode/hfma2.cpp
     shader/decode/conversion.cpp
     shader/decode/memory.cpp
+    shader/decode/texture.cpp
     shader/decode/float_set_predicate.cpp
     shader/decode/integer_set_predicate.cpp
     shader/decode/half_set_predicate.cpp
@@ -94,12 +101,38 @@ add_library(video_core STATIC
     surface.h
     textures/astc.cpp
     textures/astc.h
+    textures/convert.cpp
+    textures/convert.h
     textures/decoders.cpp
     textures/decoders.h
     textures/texture.h
     video_core.cpp
     video_core.h
 )
+
+if (ENABLE_VULKAN)
+    target_sources(video_core PRIVATE
+        renderer_vulkan/declarations.h
+        renderer_vulkan/maxwell_to_vk.cpp
+        renderer_vulkan/maxwell_to_vk.h
+        renderer_vulkan/vk_buffer_cache.cpp
+        renderer_vulkan/vk_buffer_cache.h
+        renderer_vulkan/vk_device.cpp
+        renderer_vulkan/vk_device.h
+        renderer_vulkan/vk_memory_manager.cpp
+        renderer_vulkan/vk_memory_manager.h
+        renderer_vulkan/vk_resource_manager.cpp
+        renderer_vulkan/vk_resource_manager.h
+        renderer_vulkan/vk_sampler_cache.cpp
+        renderer_vulkan/vk_sampler_cache.h
+        renderer_vulkan/vk_scheduler.cpp
+        renderer_vulkan/vk_scheduler.h
+        renderer_vulkan/vk_stream_buffer.cpp
+        renderer_vulkan/vk_stream_buffer.h)
+
+    target_include_directories(video_core PRIVATE ../../externals/Vulkan-Headers/include)
+    target_compile_definitions(video_core PRIVATE HAS_VULKAN)
+endif()
 
 create_target_directory_groups(video_core)
 

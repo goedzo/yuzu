@@ -13,10 +13,6 @@
 #include "core/hle/kernel/object.h"
 #include "core/hle/kernel/writable_event.h"
 
-namespace CoreTiming {
-struct EventType;
-}
-
 namespace Service::NVFlinger {
 
 struct IGBPBuffer {
@@ -71,14 +67,14 @@ public:
         Status status = Status::Free;
         IGBPBuffer igbp_buffer;
         BufferTransformFlags transform;
-        MathUtil::Rectangle<int> crop_rect;
+        Common::Rectangle<int> crop_rect;
     };
 
     void SetPreallocatedBuffer(u32 slot, const IGBPBuffer& igbp_buffer);
     std::optional<u32> DequeueBuffer(u32 width, u32 height);
     const IGBPBuffer& RequestBuffer(u32 slot) const;
     void QueueBuffer(u32 slot, BufferTransformFlags transform,
-                     const MathUtil::Rectangle<int>& crop_rect);
+                     const Common::Rectangle<int>& crop_rect);
     std::optional<std::reference_wrapper<const Buffer>> AcquireBuffer();
     void ReleaseBuffer(u32 slot);
     u32 Query(QueryType type);

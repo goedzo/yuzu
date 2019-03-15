@@ -18,16 +18,10 @@
 #include "core/hle/kernel/readable_event.h"
 #include "core/hle/kernel/writable_event.h"
 #include "core/hle/service/audio/audout_u.h"
+#include "core/hle/service/audio/errors.h"
 #include "core/memory.h"
 
 namespace Service::Audio {
-
-namespace ErrCodes {
-enum {
-    ErrorUnknown = 2,
-    BufferCountExceeded = 8,
-};
-}
 
 constexpr std::array<char, 10> DefaultDevice{{"DeviceOut"}};
 constexpr int DefaultSampleRate{48000};
@@ -68,12 +62,12 @@ public:
         RegisterHandlers(functions);
 
         // This is the event handle used to check if the audio buffer was released
-        auto& kernel = Core::System::GetInstance().Kernel();
-        buffer_event = Kernel::WritableEvent::CreateEventPair(kernel, Kernel::ResetType::Sticky,
-                                                              "IAudioOutBufferReleased");
+        auto& system = Core::System::GetInstance();
+        buffer_event = Kernel::WritableEvent::CreateEventPair(
+            system.Kernel(), Kernel::ResetType::Sticky, "IAudioOutBufferReleased");
 
-        stream = audio_core.OpenStream(audio_params.sample_rate, audio_params.channel_count,
-                                       std::move(unique_name),
+        stream = audio_core.OpenStream(system.CoreTiming(), audio_params.sample_rate,
+                                       audio_params.channel_count, std::move(unique_name),
                                        [=]() { buffer_event.writable->Signal(); });
     }
 
@@ -100,7 +94,7 @@ private:
 
         if (stream->IsPlaying()) {
             IPC::ResponseBuilder rb{ctx, 2};
-            rb.Push(ResultCode(ErrorModule::Audio, ErrCodes::ErrorUnknown));
+            rb.Push(ERR_OPERATION_FAILED);
             return;
         }
 
@@ -113,7 +107,9 @@ private:
     void StopAudioOut(Kernel::HLERequestContext& ctx) {
         LOG_DEBUG(Service_Audio, "called");
 
-        audio_core.StopStream(stream);
+        if (stream->IsPlaying()) {
+            audio_core.StopStream(stream);
+        }
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
@@ -143,7 +139,8 @@ private:
 
         if (!audio_core.QueueBuffer(stream, tag, std::move(samples))) {
             IPC::ResponseBuilder rb{ctx, 2};
-            rb.Push(ResultCode(ErrorModule::Audio, ErrCodes::BufferCountExceeded));
+            rb.Push(ERR_BUFFER_COUNT_EXCEEDED);
+            return;
         }
 
         IPC::ResponseBuilder rb{ctx, 2};
