@@ -102,8 +102,9 @@ struct FramebufferCacheKey {
 
 RasterizerOpenGL::RasterizerOpenGL(Core::Frontend::EmuWindow& window, Core::System& system,
                                    ScreenInfo& info)
-    : res_cache{*this}, shader_cache{*this, system}, emu_window{window}, screen_info{info},
-      buffer_cache(*this, STREAM_BUFFER_SIZE), global_cache{*this} {
+    : res_cache{*this}, shader_cache{*this, system}, global_cache{*this},
+      emu_window{window}, system{system}, screen_info{info},
+      buffer_cache(*this, STREAM_BUFFER_SIZE) {
     // Create sampler objects
     for (std::size_t i = 0; i < texture_samplers.size(); ++i) {
         texture_samplers[i].Create();
@@ -118,7 +119,7 @@ RasterizerOpenGL::RasterizerOpenGL(Core::Frontend::EmuWindow& window, Core::Syst
 
     glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &uniform_buffer_alignment);
 
-    LOG_CRITICAL(Render_OpenGL, "Sync fixed function OpenGL state here!");
+    LOG_DEBUG(Render_OpenGL, "Sync fixed function OpenGL state here");
     CheckExtensions();
 }
 
@@ -138,7 +139,7 @@ void RasterizerOpenGL::CheckExtensions() {
 }
 
 GLuint RasterizerOpenGL::SetupVertexFormat() {
-    auto& gpu = Core::System::GetInstance().GPU().Maxwell3D();
+    auto& gpu = system.GPU().Maxwell3D();
     const auto& regs = gpu.regs;
 
     if (!gpu.dirty_flags.vertex_attrib_format) {
@@ -177,7 +178,7 @@ GLuint RasterizerOpenGL::SetupVertexFormat() {
                 continue;
 
             const auto& buffer = regs.vertex_array[attrib.buffer];
-            LOG_TRACE(HW_GPU,
+            LOG_TRACE(Render_OpenGL,
                       "vertex attrib {}, count={}, size={}, type={}, offset={}, normalize={}",
                       index, attrib.ComponentCount(), attrib.SizeString(), attrib.TypeString(),
                       attrib.offset.Value(), attrib.IsNormalized());
@@ -200,24 +201,24 @@ GLuint RasterizerOpenGL::SetupVertexFormat() {
     }
 
     // Rebinding the VAO invalidates the vertex buffer bindings.
-    gpu.dirty_flags.vertex_array = 0xFFFFFFFF;
+    gpu.dirty_flags.vertex_array.set();
 
     state.draw.vertex_array = vao_entry.handle;
     return vao_entry.handle;
 }
 
 void RasterizerOpenGL::SetupVertexBuffer(GLuint vao) {
-    auto& gpu = Core::System::GetInstance().GPU().Maxwell3D();
+    auto& gpu = system.GPU().Maxwell3D();
     const auto& regs = gpu.regs;
 
-    if (!gpu.dirty_flags.vertex_array)
+    if (gpu.dirty_flags.vertex_array.none())
         return;
 
     MICROPROFILE_SCOPE(OpenGL_VB);
 
     // Upload all guest vertex arrays sequentially to our buffer
     for (u32 index = 0; index < Maxwell::NumVertexArrays; ++index) {
-        if (~gpu.dirty_flags.vertex_array & (1u << index))
+        if (!gpu.dirty_flags.vertex_array[index])
             continue;
 
         const auto& vertex_array = regs.vertex_array[index];
@@ -244,11 +245,11 @@ void RasterizerOpenGL::SetupVertexBuffer(GLuint vao) {
         }
     }
 
-    gpu.dirty_flags.vertex_array = 0;
+    gpu.dirty_flags.vertex_array.reset();
 }
 
 DrawParameters RasterizerOpenGL::SetupDraw() {
-    const auto& gpu = Core::System::GetInstance().GPU().Maxwell3D();
+    const auto& gpu = system.GPU().Maxwell3D();
     const auto& regs = gpu.regs;
     const bool is_indexed = accelerate_draw == AccelDraw::Indexed;
 
@@ -297,7 +298,7 @@ DrawParameters RasterizerOpenGL::SetupDraw() {
 
 void RasterizerOpenGL::SetupShaders(GLenum primitive_mode) {
     MICROPROFILE_SCOPE(OpenGL_Shader);
-    auto& gpu = Core::System::GetInstance().GPU().Maxwell3D();
+    auto& gpu = system.GPU().Maxwell3D();
 
     BaseBindings base_bindings;
     std::array<bool, Maxwell::NumClipDistances> clip_distances{};
@@ -343,9 +344,8 @@ void RasterizerOpenGL::SetupShaders(GLenum primitive_mode) {
             shader_program_manager->UseProgrammableFragmentShader(program_handle);
             break;
         default:
-            LOG_CRITICAL(HW_GPU, "Unimplemented shader index={}, enable={}, offset=0x{:08X}", index,
-                         shader_config.enable.Value(), shader_config.offset);
-            UNREACHABLE();
+            UNIMPLEMENTED_MSG("Unimplemented shader index={}, enable={}, offset=0x{:08X}", index,
+                              shader_config.enable.Value(), shader_config.offset);
         }
 
         const auto stage_enum = static_cast<Maxwell::ShaderStage>(stage);
@@ -414,7 +414,7 @@ void RasterizerOpenGL::SetupCachedFramebuffer(const FramebufferCacheKey& fbkey,
 }
 
 std::size_t RasterizerOpenGL::CalculateVertexArraysSize() const {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
 
     std::size_t size = 0;
     for (u32 index = 0; index < Maxwell::NumVertexArrays; ++index) {
@@ -432,7 +432,7 @@ std::size_t RasterizerOpenGL::CalculateVertexArraysSize() const {
 }
 
 std::size_t RasterizerOpenGL::CalculateIndexBufferSize() const {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
 
     return static_cast<std::size_t>(regs.index_array.count) *
            static_cast<std::size_t>(regs.index_array.FormatSizeInBytes());
@@ -488,13 +488,13 @@ std::pair<bool, bool> RasterizerOpenGL::ConfigureFramebuffers(
     OpenGLState& current_state, bool using_color_fb, bool using_depth_fb, bool preserve_contents,
     std::optional<std::size_t> single_color_target) {
     MICROPROFILE_SCOPE(OpenGL_Framebuffer);
-    const auto& gpu = Core::System::GetInstance().GPU().Maxwell3D();
+    auto& gpu = system.GPU().Maxwell3D();
     const auto& regs = gpu.regs;
 
     const FramebufferConfigState fb_config_state{using_color_fb, using_depth_fb, preserve_contents,
                                                  single_color_target};
-    if (fb_config_state == current_framebuffer_config_state && gpu.dirty_flags.color_buffer == 0 &&
-        !gpu.dirty_flags.zeta_buffer) {
+    if (fb_config_state == current_framebuffer_config_state &&
+        gpu.dirty_flags.color_buffer.none() && !gpu.dirty_flags.zeta_buffer) {
         // Only skip if the previous ConfigureFramebuffers call was from the same kind (multiple or
         // single color targets). This is done because the guest registers may not change but the
         // host framebuffer may contain different attachments
@@ -582,7 +582,7 @@ void RasterizerOpenGL::Clear() {
     const auto prev_state{state};
     SCOPE_EXIT({ prev_state.Apply(); });
 
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
     bool use_color{};
     bool use_depth{};
     bool use_stencil{};
@@ -673,7 +673,7 @@ void RasterizerOpenGL::DrawArrays() {
         return;
 
     MICROPROFILE_SCOPE(OpenGL_Drawing);
-    auto& gpu = Core::System::GetInstance().GPU().Maxwell3D();
+    auto& gpu = system.GPU().Maxwell3D();
     const auto& regs = gpu.regs;
 
     ConfigureFramebuffers(state);
@@ -721,10 +721,10 @@ void RasterizerOpenGL::DrawArrays() {
     // Add space for at least 18 constant buffers
     buffer_size += Maxwell::MaxConstBuffers * (MaxConstbufferSize + uniform_buffer_alignment);
 
-    bool invalidate = buffer_cache.Map(buffer_size);
+    const bool invalidate = buffer_cache.Map(buffer_size);
     if (invalidate) {
         // As all cached buffers are invalidated, we need to recheck their state.
-        gpu.dirty_flags.vertex_array = 0xFFFFFFFF;
+        gpu.dirty_flags.vertex_array.set();
     }
 
     const GLuint vao = SetupVertexFormat();
@@ -738,30 +738,18 @@ void RasterizerOpenGL::DrawArrays() {
     shader_program_manager->ApplyTo(state);
     state.Apply();
 
-    // Execute draw call
+    res_cache.SignalPreDrawCall();
     params.DispatchDraw();
-
-    // Disable scissor test
-    state.viewports[0].scissor.enabled = false;
+    res_cache.SignalPostDrawCall();
 
     accelerate_draw = AccelDraw::Disabled;
-
-    // Unbind textures for potential future use as framebuffer attachments
-    for (auto& texture_unit : state.texture_units) {
-        texture_unit.Unbind();
-    }
-    state.Apply();
 }
 
 void RasterizerOpenGL::FlushAll() {}
 
 void RasterizerOpenGL::FlushRegion(VAddr addr, u64 size) {
     MICROPROFILE_SCOPE(OpenGL_CacheManagement);
-
-    if (Settings::values.use_accurate_gpu_emulation) {
-        // Only flush if use_accurate_gpu_emulation is enabled, as it incurs a performance hit
-        res_cache.FlushRegion(addr, size);
-    }
+    res_cache.FlushRegion(addr, size);
 }
 
 void RasterizerOpenGL::InvalidateRegion(VAddr addr, u64 size) {
@@ -779,8 +767,8 @@ void RasterizerOpenGL::FlushAndInvalidateRegion(VAddr addr, u64 size) {
 
 bool RasterizerOpenGL::AccelerateSurfaceCopy(const Tegra::Engines::Fermi2D::Regs::Surface& src,
                                              const Tegra::Engines::Fermi2D::Regs::Surface& dst,
-                                             const MathUtil::Rectangle<u32>& src_rect,
-                                             const MathUtil::Rectangle<u32>& dst_rect) {
+                                             const Common::Rectangle<u32>& src_rect,
+                                             const Common::Rectangle<u32>& dst_rect) {
     MICROPROFILE_SCOPE(OpenGL_Blits);
     res_cache.FermiCopySurface(src, dst, src_rect, dst_rect);
     return true;
@@ -805,7 +793,10 @@ bool RasterizerOpenGL::AccelerateDisplay(const Tegra::FramebufferConfig& config,
         VideoCore::Surface::PixelFormatFromGPUPixelFormat(config.pixel_format)};
     ASSERT_MSG(params.width == config.width, "Framebuffer width is different");
     ASSERT_MSG(params.height == config.height, "Framebuffer height is different");
-    ASSERT_MSG(params.pixel_format == pixel_format, "Framebuffer pixel_format is different");
+
+    if (params.pixel_format != pixel_format) {
+        LOG_WARNING(Render_OpenGL, "Framebuffer pixel_format is different");
+    }
 
     screen_info.display_texture = surface->Texture().handle;
 
@@ -814,104 +805,87 @@ bool RasterizerOpenGL::AccelerateDisplay(const Tegra::FramebufferConfig& config,
 
 void RasterizerOpenGL::SamplerInfo::Create() {
     sampler.Create();
-    mag_filter = min_filter = Tegra::Texture::TextureFilter::Linear;
-    wrap_u = wrap_v = wrap_p = Tegra::Texture::WrapMode::Wrap;
-    uses_depth_compare = false;
+    mag_filter = Tegra::Texture::TextureFilter::Linear;
+    min_filter = Tegra::Texture::TextureFilter::Linear;
+    wrap_u = Tegra::Texture::WrapMode::Wrap;
+    wrap_v = Tegra::Texture::WrapMode::Wrap;
+    wrap_p = Tegra::Texture::WrapMode::Wrap;
+    use_depth_compare = false;
     depth_compare_func = Tegra::Texture::DepthCompareFunc::Never;
 
-    // default is GL_LINEAR_MIPMAP_LINEAR
+    // OpenGL's default is GL_LINEAR_MIPMAP_LINEAR
     glSamplerParameteri(sampler.handle, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    // Other attributes have correct defaults
     glSamplerParameteri(sampler.handle, GL_TEXTURE_COMPARE_FUNC, GL_NEVER);
+
+    // Other attributes have correct defaults
 }
 
 void RasterizerOpenGL::SamplerInfo::SyncWithConfig(const Tegra::Texture::TSCEntry& config) {
-    const GLuint s = sampler.handle;
+    const GLuint sampler_id = sampler.handle;
     if (mag_filter != config.mag_filter) {
         mag_filter = config.mag_filter;
         glSamplerParameteri(
-            s, GL_TEXTURE_MAG_FILTER,
+            sampler_id, GL_TEXTURE_MAG_FILTER,
             MaxwellToGL::TextureFilterMode(mag_filter, Tegra::Texture::TextureMipmapFilter::None));
     }
-    if (min_filter != config.min_filter || mip_filter != config.mip_filter) {
+    if (min_filter != config.min_filter || mipmap_filter != config.mipmap_filter) {
         min_filter = config.min_filter;
-        mip_filter = config.mip_filter;
-        glSamplerParameteri(s, GL_TEXTURE_MIN_FILTER,
-                            MaxwellToGL::TextureFilterMode(min_filter, mip_filter));
+        mipmap_filter = config.mipmap_filter;
+        glSamplerParameteri(sampler_id, GL_TEXTURE_MIN_FILTER,
+                            MaxwellToGL::TextureFilterMode(min_filter, mipmap_filter));
     }
 
     if (wrap_u != config.wrap_u) {
         wrap_u = config.wrap_u;
-        glSamplerParameteri(s, GL_TEXTURE_WRAP_S, MaxwellToGL::WrapMode(wrap_u));
+        glSamplerParameteri(sampler_id, GL_TEXTURE_WRAP_S, MaxwellToGL::WrapMode(wrap_u));
     }
     if (wrap_v != config.wrap_v) {
         wrap_v = config.wrap_v;
-        glSamplerParameteri(s, GL_TEXTURE_WRAP_T, MaxwellToGL::WrapMode(wrap_v));
+        glSamplerParameteri(sampler_id, GL_TEXTURE_WRAP_T, MaxwellToGL::WrapMode(wrap_v));
     }
     if (wrap_p != config.wrap_p) {
         wrap_p = config.wrap_p;
-        glSamplerParameteri(s, GL_TEXTURE_WRAP_R, MaxwellToGL::WrapMode(wrap_p));
+        glSamplerParameteri(sampler_id, GL_TEXTURE_WRAP_R, MaxwellToGL::WrapMode(wrap_p));
     }
 
-    if (uses_depth_compare != (config.depth_compare_enabled == 1)) {
-        uses_depth_compare = (config.depth_compare_enabled == 1);
-        if (uses_depth_compare) {
-            glSamplerParameteri(s, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
-        } else {
-            glSamplerParameteri(s, GL_TEXTURE_COMPARE_MODE, GL_NONE);
-        }
+    if (const bool enabled = config.depth_compare_enabled == 1; use_depth_compare != enabled) {
+        use_depth_compare = enabled;
+        glSamplerParameteri(sampler_id, GL_TEXTURE_COMPARE_MODE,
+                            use_depth_compare ? GL_COMPARE_REF_TO_TEXTURE : GL_NONE);
     }
 
     if (depth_compare_func != config.depth_compare_func) {
         depth_compare_func = config.depth_compare_func;
-        glSamplerParameteri(s, GL_TEXTURE_COMPARE_FUNC,
+        glSamplerParameteri(sampler_id, GL_TEXTURE_COMPARE_FUNC,
                             MaxwellToGL::DepthCompareFunc(depth_compare_func));
     }
 
-    GLvec4 new_border_color;
-    if (config.srgb_conversion) {
-        new_border_color[0] = config.srgb_border_color_r / 255.0f;
-        new_border_color[1] = config.srgb_border_color_g / 255.0f;
-        new_border_color[2] = config.srgb_border_color_g / 255.0f;
-    } else {
-        new_border_color[0] = config.border_color_r;
-        new_border_color[1] = config.border_color_g;
-        new_border_color[2] = config.border_color_b;
-    }
-    new_border_color[3] = config.border_color_a;
-
-    if (border_color != new_border_color) {
+    if (const auto new_border_color = config.GetBorderColor(); border_color != new_border_color) {
         border_color = new_border_color;
-        glSamplerParameterfv(s, GL_TEXTURE_BORDER_COLOR, border_color.data());
+        glSamplerParameterfv(sampler_id, GL_TEXTURE_BORDER_COLOR, border_color.data());
     }
 
-    const float anisotropic_max = static_cast<float>(1 << config.max_anisotropy.Value());
-    if (anisotropic_max != max_anisotropic) {
-        max_anisotropic = anisotropic_max;
+    if (const float anisotropic = config.GetMaxAnisotropy(); max_anisotropic != anisotropic) {
+        max_anisotropic = anisotropic;
         if (GLAD_GL_ARB_texture_filter_anisotropic) {
-            glSamplerParameterf(s, GL_TEXTURE_MAX_ANISOTROPY, max_anisotropic);
+            glSamplerParameterf(sampler_id, GL_TEXTURE_MAX_ANISOTROPY, max_anisotropic);
         } else if (GLAD_GL_EXT_texture_filter_anisotropic) {
-            glSamplerParameterf(s, GL_TEXTURE_MAX_ANISOTROPY_EXT, max_anisotropic);
+            glSamplerParameterf(sampler_id, GL_TEXTURE_MAX_ANISOTROPY_EXT, max_anisotropic);
         }
     }
-    const float lod_min = static_cast<float>(config.min_lod_clamp.Value()) / 256.0f;
-    if (lod_min != min_lod) {
-        min_lod = lod_min;
-        glSamplerParameterf(s, GL_TEXTURE_MIN_LOD, min_lod);
+
+    if (const float min = config.GetMinLod(); min_lod != min) {
+        min_lod = min;
+        glSamplerParameterf(sampler_id, GL_TEXTURE_MIN_LOD, min_lod);
+    }
+    if (const float max = config.GetMaxLod(); max_lod != max) {
+        max_lod = max;
+        glSamplerParameterf(sampler_id, GL_TEXTURE_MAX_LOD, max_lod);
     }
 
-    const float lod_max = static_cast<float>(config.max_lod_clamp.Value()) / 256.0f;
-    if (lod_max != max_lod) {
-        max_lod = lod_max;
-        glSamplerParameterf(s, GL_TEXTURE_MAX_LOD, max_lod);
-    }
-    const u32 bias = config.mip_lod_bias.Value();
-    // Sign extend the 13-bit value.
-    constexpr u32 mask = 1U << (13 - 1);
-    const float bias_lod = static_cast<s32>((bias ^ mask) - mask) / 256.f;
-    if (lod_bias != bias_lod) {
-        lod_bias = bias_lod;
-        glSamplerParameterf(s, GL_TEXTURE_LOD_BIAS, lod_bias);
+    if (const float bias = config.GetLodBias(); lod_bias != bias) {
+        lod_bias = bias;
+        glSamplerParameterf(sampler_id, GL_TEXTURE_LOD_BIAS, lod_bias);
     }
 }
 
@@ -919,7 +893,7 @@ void RasterizerOpenGL::SetupConstBuffers(Tegra::Engines::Maxwell3D::Regs::Shader
                                          const Shader& shader, GLuint program_handle,
                                          BaseBindings base_bindings) {
     MICROPROFILE_SCOPE(OpenGL_UBO);
-    const auto& gpu = Core::System::GetInstance().GPU();
+    const auto& gpu = system.GPU();
     const auto& maxwell3d = gpu.Maxwell3D();
     const auto& shader_stage = maxwell3d.state.shader_stages[static_cast<std::size_t>(stage)];
     const auto& entries = shader->GetShaderEntries().const_buffers;
@@ -951,8 +925,8 @@ void RasterizerOpenGL::SetupConstBuffers(Tegra::Engines::Maxwell3D::Regs::Shader
             size = buffer.size;
 
             if (size > MaxConstbufferSize) {
-                LOG_CRITICAL(HW_GPU, "indirect constbuffer size {} exceeds maximum {}", size,
-                             MaxConstbufferSize);
+                LOG_WARNING(Render_OpenGL, "Indirect constbuffer size {} exceeds maximum {}", size,
+                            MaxConstbufferSize);
                 size = MaxConstbufferSize;
             }
         } else {
@@ -998,7 +972,7 @@ void RasterizerOpenGL::SetupGlobalRegions(Tegra::Engines::Maxwell3D::Regs::Shade
 void RasterizerOpenGL::SetupTextures(Maxwell::ShaderStage stage, const Shader& shader,
                                      GLuint program_handle, BaseBindings base_bindings) {
     MICROPROFILE_SCOPE(OpenGL_Texture);
-    const auto& gpu = Core::System::GetInstance().GPU();
+    const auto& gpu = system.GPU();
     const auto& maxwell3d = gpu.Maxwell3D();
     const auto& entries = shader->GetShaderEntries().samplers;
 
@@ -1012,10 +986,9 @@ void RasterizerOpenGL::SetupTextures(Maxwell::ShaderStage stage, const Shader& s
 
         texture_samplers[current_bindpoint].SyncWithConfig(texture.tsc);
 
-        Surface surface = res_cache.GetTextureSurface(texture, entry);
-        if (surface != nullptr) {
+        if (Surface surface = res_cache.GetTextureSurface(texture, entry); surface) {
             state.texture_units[current_bindpoint].texture =
-                entry.IsArray() ? surface->TextureLayer().handle : surface->Texture().handle;
+                surface->Texture(entry.IsArray()).handle;
             surface->UpdateSwizzle(texture.tic.x_source, texture.tic.y_source, texture.tic.z_source,
                                    texture.tic.w_source);
         } else {
@@ -1026,7 +999,7 @@ void RasterizerOpenGL::SetupTextures(Maxwell::ShaderStage stage, const Shader& s
 }
 
 void RasterizerOpenGL::SyncViewport(OpenGLState& current_state) {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
     const bool geometry_shaders_enabled =
         regs.IsShaderConfigEnabled(static_cast<size_t>(Maxwell::ShaderProgram::Geometry));
     const std::size_t viewport_count =
@@ -1034,7 +1007,7 @@ void RasterizerOpenGL::SyncViewport(OpenGLState& current_state) {
     for (std::size_t i = 0; i < viewport_count; i++) {
         auto& viewport = current_state.viewports[i];
         const auto& src = regs.viewports[i];
-        const MathUtil::Rectangle<s32> viewport_rect{regs.viewport_transform[i].GetRect()};
+        const Common::Rectangle<s32> viewport_rect{regs.viewport_transform[i].GetRect()};
         viewport.x = viewport_rect.left;
         viewport.y = viewport_rect.bottom;
         viewport.width = viewport_rect.GetWidth();
@@ -1049,7 +1022,7 @@ void RasterizerOpenGL::SyncViewport(OpenGLState& current_state) {
 void RasterizerOpenGL::SyncClipEnabled(
     const std::array<bool, Maxwell::Regs::NumClipDistances>& clip_mask) {
 
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
     const std::array<bool, Maxwell::Regs::NumClipDistances> reg_state{
         regs.clip_distance_enabled.c0 != 0, regs.clip_distance_enabled.c1 != 0,
         regs.clip_distance_enabled.c2 != 0, regs.clip_distance_enabled.c3 != 0,
@@ -1066,7 +1039,7 @@ void RasterizerOpenGL::SyncClipCoef() {
 }
 
 void RasterizerOpenGL::SyncCullMode() {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
 
     state.cull.enabled = regs.cull.enabled != 0;
 
@@ -1090,14 +1063,14 @@ void RasterizerOpenGL::SyncCullMode() {
 }
 
 void RasterizerOpenGL::SyncPrimitiveRestart() {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
 
     state.primitive_restart.enabled = regs.primitive_restart.enabled;
     state.primitive_restart.index = regs.primitive_restart.index;
 }
 
 void RasterizerOpenGL::SyncDepthTestState() {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
 
     state.depth.test_enabled = regs.depth_test_enable != 0;
     state.depth.write_mask = regs.depth_write_enabled ? GL_TRUE : GL_FALSE;
@@ -1109,7 +1082,7 @@ void RasterizerOpenGL::SyncDepthTestState() {
 }
 
 void RasterizerOpenGL::SyncStencilTestState() {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
     state.stencil.test_enabled = regs.stencil_enable != 0;
 
     if (!regs.stencil_enable) {
@@ -1143,7 +1116,7 @@ void RasterizerOpenGL::SyncStencilTestState() {
 }
 
 void RasterizerOpenGL::SyncColorMask() {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
     const std::size_t count =
         regs.independent_blend_enable ? Tegra::Engines::Maxwell3D::Regs::NumRenderTargets : 1;
     for (std::size_t i = 0; i < count; i++) {
@@ -1157,18 +1130,18 @@ void RasterizerOpenGL::SyncColorMask() {
 }
 
 void RasterizerOpenGL::SyncMultiSampleState() {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
     state.multisample_control.alpha_to_coverage = regs.multisample_control.alpha_to_coverage != 0;
     state.multisample_control.alpha_to_one = regs.multisample_control.alpha_to_one != 0;
 }
 
 void RasterizerOpenGL::SyncFragmentColorClampState() {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
     state.fragment_color_clamp.enabled = regs.frag_color_clamp != 0;
 }
 
 void RasterizerOpenGL::SyncBlendState() {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
 
     state.blend_color.red = regs.blend_color.r;
     state.blend_color.green = regs.blend_color.g;
@@ -1210,7 +1183,7 @@ void RasterizerOpenGL::SyncBlendState() {
 }
 
 void RasterizerOpenGL::SyncLogicOpState() {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
 
     state.logic_op.enabled = regs.logic_op.enable != 0;
 
@@ -1224,7 +1197,7 @@ void RasterizerOpenGL::SyncLogicOpState() {
 }
 
 void RasterizerOpenGL::SyncScissorTest(OpenGLState& current_state) {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
     const bool geometry_shaders_enabled =
         regs.IsShaderConfigEnabled(static_cast<size_t>(Maxwell::ShaderProgram::Geometry));
     const std::size_t viewport_count =
@@ -1246,21 +1219,17 @@ void RasterizerOpenGL::SyncScissorTest(OpenGLState& current_state) {
 }
 
 void RasterizerOpenGL::SyncTransformFeedback() {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
-
-    if (regs.tfb_enabled != 0) {
-        LOG_CRITICAL(Render_OpenGL, "Transform feedbacks are not implemented");
-        UNREACHABLE();
-    }
+    const auto& regs = system.GPU().Maxwell3D().regs;
+    UNIMPLEMENTED_IF_MSG(regs.tfb_enabled != 0, "Transform feedbacks are not implemented");
 }
 
 void RasterizerOpenGL::SyncPointState() {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
     state.point.size = regs.point_size;
 }
 
 void RasterizerOpenGL::SyncPolygonOffset() {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& regs = system.GPU().Maxwell3D().regs;
     state.polygon_offset.fill_enable = regs.polygon_offset_fill_enable != 0;
     state.polygon_offset.line_enable = regs.polygon_offset_line_enable != 0;
     state.polygon_offset.point_enable = regs.polygon_offset_point_enable != 0;
@@ -1270,13 +1239,9 @@ void RasterizerOpenGL::SyncPolygonOffset() {
 }
 
 void RasterizerOpenGL::CheckAlphaTests() {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
-
-    if (regs.alpha_test_enabled != 0 && regs.rt_control.count > 1) {
-        LOG_CRITICAL(Render_OpenGL, "Alpha Testing is enabled with Multiple Render Targets, "
-                                    "this behavior is undefined.");
-        UNREACHABLE();
-    }
+    const auto& regs = system.GPU().Maxwell3D().regs;
+    UNIMPLEMENTED_IF_MSG(regs.alpha_test_enabled != 0 && regs.rt_control.count > 1,
+                         "Alpha Testing is enabled with more than one rendertarget");
 }
 
 } // namespace OpenGL

@@ -53,9 +53,10 @@ void SetupMainThread(Process& owner_process, KernelCore& kernel, VAddr entry_poi
 CodeSet::CodeSet() = default;
 CodeSet::~CodeSet() = default;
 
-SharedPtr<Process> Process::Create(KernelCore& kernel, std::string&& name) {
-    SharedPtr<Process> process(new Process(kernel));
+SharedPtr<Process> Process::Create(Core::System& system, std::string&& name) {
+    auto& kernel = system.Kernel();
 
+    SharedPtr<Process> process(new Process(system));
     process->name = std::move(name);
     process->resource_limit = kernel.GetSystemResourceLimit();
     process->status = ProcessStatus::Created;
@@ -99,7 +100,13 @@ ResultCode Process::LoadFromMetadata(const FileSys::ProgramMetadata& metadata) {
     vm_manager.Reset(metadata.GetAddressSpaceType());
 
     const auto& caps = metadata.GetKernelCapabilities();
-    return capabilities.InitializeForUserProcess(caps.data(), caps.size(), vm_manager);
+    const auto capability_init_result =
+        capabilities.InitializeForUserProcess(caps.data(), caps.size(), vm_manager);
+    if (capability_init_result.IsError()) {
+        return capability_init_result;
+    }
+
+    return handle_table.SetSize(capabilities.GetHandleTableSize());
 }
 
 void Process::Run(VAddr entry_point, s32 main_thread_priority, u32 stack_size) {
@@ -126,7 +133,7 @@ void Process::PrepareForTermination() {
             if (thread->GetOwnerProcess() != this)
                 continue;
 
-            if (thread == GetCurrentThread())
+            if (thread == system.CurrentScheduler().GetCurrentThread())
                 continue;
 
             // TODO(Subv): When are the other running/ready threads terminated?
@@ -138,7 +145,6 @@ void Process::PrepareForTermination() {
         }
     };
 
-    const auto& system = Core::System::GetInstance();
     stop_threads(system.Scheduler(0).GetThreadList());
     stop_threads(system.Scheduler(1).GetThreadList());
     stop_threads(system.Scheduler(2).GetThreadList());
@@ -221,14 +227,12 @@ void Process::LoadModule(CodeSet module_, VAddr base_addr) {
     MapSegment(module_.DataSegment(), VMAPermission::ReadWrite, MemoryState::CodeMutable);
 
     // Clear instruction cache in CPU JIT
-    Core::System::GetInstance().ArmInterface(0).ClearInstructionCache();
-    Core::System::GetInstance().ArmInterface(1).ClearInstructionCache();
-    Core::System::GetInstance().ArmInterface(2).ClearInstructionCache();
-    Core::System::GetInstance().ArmInterface(3).ClearInstructionCache();
+    system.InvalidateCpuInstructionCaches();
 }
 
-Kernel::Process::Process(KernelCore& kernel) : WaitObject{kernel} {}
-Kernel::Process::~Process() {}
+Process::Process(Core::System& system)
+    : WaitObject{system.Kernel()}, address_arbiter{system}, system{system} {}
+Process::~Process() = default;
 
 void Process::Acquire(Thread* thread) {
     ASSERT_MSG(!ShouldWait(thread), "Object unavailable!");

@@ -12,6 +12,7 @@
 
 #include "core/core.h"
 #include "core/core_timing.h"
+#include "core/hle/kernel/address_arbiter.h"
 #include "core/hle/kernel/client_port.h"
 #include "core/hle/kernel/handle_table.h"
 #include "core/hle/kernel/kernel.h"
@@ -86,6 +87,8 @@ static void ThreadWakeupCallback(u64 thread_handle, [[maybe_unused]] int cycles_
 }
 
 struct KernelCore::Impl {
+    explicit Impl(Core::System& system) : system{system} {}
+
     void Initialize(KernelCore& kernel) {
         Shutdown();
 
@@ -124,7 +127,7 @@ struct KernelCore::Impl {
 
     void InitializeThreads() {
         thread_wakeup_event_type =
-            CoreTiming::RegisterEvent("ThreadWakeupCallback", ThreadWakeupCallback);
+            system.CoreTiming().RegisterEvent("ThreadWakeupCallback", ThreadWakeupCallback);
     }
 
     std::atomic<u32> next_object_id{0};
@@ -137,7 +140,7 @@ struct KernelCore::Impl {
 
     SharedPtr<ResourceLimit> system_resource_limit;
 
-    CoreTiming::EventType* thread_wakeup_event_type = nullptr;
+    Core::Timing::EventType* thread_wakeup_event_type = nullptr;
     // TODO(yuriks): This can be removed if Thread objects are explicitly pooled in the future,
     // allowing us to simply use a pool index or similar.
     Kernel::HandleTable thread_wakeup_callback_handle_table;
@@ -145,9 +148,12 @@ struct KernelCore::Impl {
     /// Map of named ports managed by the kernel, which can be retrieved using
     /// the ConnectToPort SVC.
     NamedPortTable named_ports;
+
+    // System context
+    Core::System& system;
 };
 
-KernelCore::KernelCore() : impl{std::make_unique<Impl>()} {}
+KernelCore::KernelCore(Core::System& system) : impl{std::make_unique<Impl>(system)} {}
 KernelCore::~KernelCore() {
     Shutdown();
 }
@@ -213,7 +219,7 @@ u64 KernelCore::CreateNewProcessID() {
     return impl->next_process_id++;
 }
 
-CoreTiming::EventType* KernelCore::ThreadWakeupCallbackEventType() const {
+Core::Timing::EventType* KernelCore::ThreadWakeupCallbackEventType() const {
     return impl->thread_wakeup_event_type;
 }
 

@@ -16,6 +16,14 @@ class Scheduler;
 }
 
 namespace Core {
+class System;
+}
+
+namespace Core::Timing {
+class CoreTiming;
+}
+
+namespace Core {
 
 class ARM_Interface;
 class ExclusiveMonitor;
@@ -41,7 +49,8 @@ private:
 
 class Cpu {
 public:
-    Cpu(ExclusiveMonitor& exclusive_monitor, CpuBarrier& cpu_barrier, std::size_t core_index);
+    Cpu(System& system, ExclusiveMonitor& exclusive_monitor, CpuBarrier& cpu_barrier,
+        std::size_t core_index);
     ~Cpu();
 
     void RunLoop(bool tight_loop = true);
@@ -82,6 +91,7 @@ private:
     std::unique_ptr<ARM_Interface> arm_interface;
     CpuBarrier& cpu_barrier;
     std::unique_ptr<Kernel::Scheduler> scheduler;
+    Timing::CoreTiming& core_timing;
 
     std::atomic<bool> reschedule_pending = false;
     std::size_t core_index;

@@ -62,8 +62,8 @@ public:
     void FlushAndInvalidateRegion(VAddr addr, u64 size) override;
     bool AccelerateSurfaceCopy(const Tegra::Engines::Fermi2D::Regs::Surface& src,
                                const Tegra::Engines::Fermi2D::Regs::Surface& dst,
-                               const MathUtil::Rectangle<u32>& src_rect,
-                               const MathUtil::Rectangle<u32>& dst_rect) override;
+                               const Common::Rectangle<u32>& src_rect,
+                               const Common::Rectangle<u32>& dst_rect) override;
     bool AccelerateDisplay(const Tegra::FramebufferConfig& config, VAddr framebuffer_addr,
                            u32 pixel_stride) override;
     bool AccelerateDrawBatch(bool is_indexed) override;
@@ -94,11 +94,12 @@ private:
     private:
         Tegra::Texture::TextureFilter mag_filter = Tegra::Texture::TextureFilter::Nearest;
         Tegra::Texture::TextureFilter min_filter = Tegra::Texture::TextureFilter::Nearest;
-        Tegra::Texture::TextureMipmapFilter mip_filter = Tegra::Texture::TextureMipmapFilter::None;
+        Tegra::Texture::TextureMipmapFilter mipmap_filter =
+            Tegra::Texture::TextureMipmapFilter::None;
         Tegra::Texture::WrapMode wrap_u = Tegra::Texture::WrapMode::ClampToEdge;
         Tegra::Texture::WrapMode wrap_v = Tegra::Texture::WrapMode::ClampToEdge;
         Tegra::Texture::WrapMode wrap_p = Tegra::Texture::WrapMode::ClampToEdge;
-        bool uses_depth_compare = false;
+        bool use_depth_compare = false;
         Tegra::Texture::DepthCompareFunc depth_compare_func =
             Tegra::Texture::DepthCompareFunc::Always;
         GLvec4 border_color = {};
@@ -214,6 +215,7 @@ private:
     GlobalRegionCacheOpenGL global_cache;
 
     Core::Frontend::EmuWindow& emu_window;
+    Core::System& system;
 
     ScreenInfo& screen_info;
 

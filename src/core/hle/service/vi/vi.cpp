@@ -24,6 +24,7 @@
 #include "core/hle/service/nvdrv/nvdrv.h"
 #include "core/hle/service/nvflinger/buffer_queue.h"
 #include "core/hle/service/nvflinger/nvflinger.h"
+#include "core/hle/service/service.h"
 #include "core/hle/service/vi/vi.h"
 #include "core/hle/service/vi/vi_m.h"
 #include "core/hle/service/vi/vi_s.h"
@@ -33,6 +34,7 @@
 namespace Service::VI {
 
 constexpr ResultCode ERR_OPERATION_FAILED{ErrorModule::VI, 1};
+constexpr ResultCode ERR_PERMISSION_DENIED{ErrorModule::VI, 5};
 constexpr ResultCode ERR_UNSUPPORTED{ErrorModule::VI, 6};
 constexpr ResultCode ERR_NOT_FOUND{ErrorModule::VI, 7};
 
@@ -420,7 +422,7 @@ public:
         u32_le fence_is_valid;
         std::array<Fence, 2> fences;
 
-        MathUtil::Rectangle<int> GetCropRect() const {
+        Common::Rectangle<int> GetCropRect() const {
             return {crop_left, crop_top, crop_right, crop_bottom};
         }
     };
@@ -525,7 +527,7 @@ private:
         LOG_DEBUG(Service_VI, "called. id=0x{:08X} transaction={:X}, flags=0x{:08X}", id,
                   static_cast<u32>(transaction), flags);
 
-        auto buffer_queue = nv_flinger->FindBufferQueue(id);
+        auto& buffer_queue = nv_flinger->FindBufferQueue(id);
 
         if (transaction == TransactionId::Connect) {
             IGBPConnectRequestParcel request{ctx.ReadBuffer()};
@@ -538,7 +540,7 @@ private:
         } else if (transaction == TransactionId::SetPreallocatedBuffer) {
             IGBPSetPreallocatedBufferRequestParcel request{ctx.ReadBuffer()};
 
-            buffer_queue->SetPreallocatedBuffer(request.data.slot, request.buffer);
+            buffer_queue.SetPreallocatedBuffer(request.data.slot, request.buffer);
 
             IGBPSetPreallocatedBufferResponseParcel response{};
             ctx.WriteBuffer(response.Serialize());
@@ -546,7 +548,7 @@ private:
             IGBPDequeueBufferRequestParcel request{ctx.ReadBuffer()};
             const u32 width{request.data.width};
             const u32 height{request.data.height};
-            std::optional<u32> slot = buffer_queue->DequeueBuffer(width, height);
+            std::optional<u32> slot = buffer_queue.DequeueBuffer(width, height);
 
             if (slot) {
                 // Buffer is available
@@ -559,8 +561,8 @@ private:
                     [=](Kernel::SharedPtr<Kernel::Thread> thread, Kernel::HLERequestContext& ctx,
                         Kernel::ThreadWakeupReason reason) {
                         // Repeat TransactParcel DequeueBuffer when a buffer is available
-                        auto buffer_queue = nv_flinger->FindBufferQueue(id);
-                        std::optional<u32> slot = buffer_queue->DequeueBuffer(width, height);
+                        auto& buffer_queue = nv_flinger->FindBufferQueue(id);
+                        std::optional<u32> slot = buffer_queue.DequeueBuffer(width, height);
                         ASSERT_MSG(slot != std::nullopt, "Could not dequeue buffer.");
 
                         IGBPDequeueBufferResponseParcel response{*slot};
@@ -568,28 +570,28 @@ private:
                         IPC::ResponseBuilder rb{ctx, 2};
                         rb.Push(RESULT_SUCCESS);
                     },
-                    buffer_queue->GetWritableBufferWaitEvent());
+                    buffer_queue.GetWritableBufferWaitEvent());
             }
         } else if (transaction == TransactionId::RequestBuffer) {
             IGBPRequestBufferRequestParcel request{ctx.ReadBuffer()};
 
-            auto& buffer = buffer_queue->RequestBuffer(request.slot);
+            auto& buffer = buffer_queue.RequestBuffer(request.slot);
 
             IGBPRequestBufferResponseParcel response{buffer};
             ctx.WriteBuffer(response.Serialize());
         } else if (transaction == TransactionId::QueueBuffer) {
             IGBPQueueBufferRequestParcel request{ctx.ReadBuffer()};
 
-            buffer_queue->QueueBuffer(request.data.slot, request.data.transform,
-                                      request.data.GetCropRect());
+            buffer_queue.QueueBuffer(request.data.slot, request.data.transform,
+                                     request.data.GetCropRect());
 
             IGBPQueueBufferResponseParcel response{1280, 720};
             ctx.WriteBuffer(response.Serialize());
         } else if (transaction == TransactionId::Query) {
             IGBPQueryRequestParcel request{ctx.ReadBuffer()};
 
-            u32 value =
-                buffer_queue->Query(static_cast<NVFlinger::BufferQueue::QueryType>(request.type));
+            const u32 value =
+                buffer_queue.Query(static_cast<NVFlinger::BufferQueue::QueryType>(request.type));
 
             IGBPQueryResponseParcel response{value};
             ctx.WriteBuffer(response.Serialize());
@@ -629,12 +631,12 @@ private:
 
         LOG_WARNING(Service_VI, "(STUBBED) called id={}, unknown={:08X}", id, unknown);
 
-        const auto buffer_queue = nv_flinger->FindBufferQueue(id);
+        const auto& buffer_queue = nv_flinger->FindBufferQueue(id);
 
         // TODO(Subv): Find out what this actually is.
         IPC::ResponseBuilder rb{ctx, 2, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushCopyObjects(buffer_queue->GetBufferWaitEvent());
+        rb.PushCopyObjects(buffer_queue.GetBufferWaitEvent());
     }
 
     std::shared_ptr<NVFlinger::NVFlinger> nv_flinger;
@@ -752,6 +754,7 @@ public:
             {1102, nullptr, "GetDisplayResolution"},
             {2010, &IManagerDisplayService::CreateManagedLayer, "CreateManagedLayer"},
             {2011, nullptr, "DestroyManagedLayer"},
+            {2012, nullptr, "CreateStrayLayer"},
             {2050, nullptr, "CreateIndirectLayer"},
             {2051, nullptr, "DestroyIndirectLayer"},
             {2052, nullptr, "CreateIndirectProducerEndPoint"},
@@ -1202,26 +1205,40 @@ IApplicationDisplayService::IApplicationDisplayService(
     RegisterHandlers(functions);
 }
 
-Module::Interface::Interface(std::shared_ptr<Module> module, const char* name,
-                             std::shared_ptr<NVFlinger::NVFlinger> nv_flinger)
-    : ServiceFramework(name), module(std::move(module)), nv_flinger(std::move(nv_flinger)) {}
+static bool IsValidServiceAccess(Permission permission, Policy policy) {
+    if (permission == Permission::User) {
+        return policy == Policy::User;
+    }
 
-Module::Interface::~Interface() = default;
+    if (permission == Permission::System || permission == Permission::Manager) {
+        return policy == Policy::User || policy == Policy::Compositor;
+    }
 
-void Module::Interface::GetDisplayService(Kernel::HLERequestContext& ctx) {
-    LOG_WARNING(Service_VI, "(STUBBED) called");
+    return false;
+}
+
+void detail::GetDisplayServiceImpl(Kernel::HLERequestContext& ctx,
+                                   std::shared_ptr<NVFlinger::NVFlinger> nv_flinger,
+                                   Permission permission) {
+    IPC::RequestParser rp{ctx};
+    const auto policy = rp.PopEnum<Policy>();
+
+    if (!IsValidServiceAccess(permission, policy)) {
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ERR_PERMISSION_DENIED);
+        return;
+    }
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushIpcInterface<IApplicationDisplayService>(nv_flinger);
+    rb.PushIpcInterface<IApplicationDisplayService>(std::move(nv_flinger));
 }
 
 void InstallInterfaces(SM::ServiceManager& service_manager,
                        std::shared_ptr<NVFlinger::NVFlinger> nv_flinger) {
-    auto module = std::make_shared<Module>();
-    std::make_shared<VI_M>(module, nv_flinger)->InstallAsService(service_manager);
-    std::make_shared<VI_S>(module, nv_flinger)->InstallAsService(service_manager);
-    std::make_shared<VI_U>(module, nv_flinger)->InstallAsService(service_manager);
+    std::make_shared<VI_M>(nv_flinger)->InstallAsService(service_manager);
+    std::make_shared<VI_S>(nv_flinger)->InstallAsService(service_manager);
+    std::make_shared<VI_U>(nv_flinger)->InstallAsService(service_manager);
 }
 
 } // namespace Service::VI

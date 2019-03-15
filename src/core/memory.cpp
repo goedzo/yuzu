@@ -71,15 +71,20 @@ static void MapPages(PageTable& page_table, VAddr base, u64 size, u8* memory, Pa
                                  FlushMode::FlushAndInvalidate);
 
     VAddr end = base + size;
-    while (base != end) {
-        ASSERT_MSG(base < page_table.pointers.size(), "out of range mapping at {:016X}", base);
+    ASSERT_MSG(end <= page_table.pointers.size(), "out of range mapping at {:016X}",
+               base + page_table.pointers.size());
 
-        page_table.attributes[base] = type;
-        page_table.pointers[base] = memory;
+    std::fill(page_table.attributes.begin() + base, page_table.attributes.begin() + end, type);
 
-        base += 1;
-        if (memory != nullptr)
+    if (memory == nullptr) {
+        std::fill(page_table.pointers.begin() + base, page_table.pointers.begin() + end, memory);
+    } else {
+        while (base != end) {
+            page_table.pointers[base] = memory;
+
+            base += 1;
             memory += PAGE_SIZE;
+        }
     }
 }
 
@@ -166,9 +171,6 @@ T Read(const VAddr vaddr) {
         return value;
     }
 
-    // The memory access might do an MMIO or cached access, so we have to lock the HLE kernel state
-    std::lock_guard<std::recursive_mutex> lock(HLE::g_hle_lock);
-
     PageType type = current_page_table->attributes[vaddr >> PAGE_BITS];
     switch (type) {
     case PageType::Unmapped:
@@ -198,9 +200,6 @@ void Write(const VAddr vaddr, const T data) {
         std::memcpy(&page_pointer[vaddr & PAGE_MASK], &data, sizeof(T));
         return;
     }
-
-    // The memory access might do an MMIO or cached access, so we have to lock the HLE kernel state
-    std::lock_guard<std::recursive_mutex> lock(HLE::g_hle_lock);
 
     PageType type = current_page_table->attributes[vaddr >> PAGE_BITS];
     switch (type) {
@@ -357,16 +356,16 @@ void RasterizerFlushVirtualRegion(VAddr start, u64 size, FlushMode mode) {
         const VAddr overlap_end = std::min(end, region_end);
         const VAddr overlap_size = overlap_end - overlap_start;
 
-        auto& rasterizer = system_instance.Renderer().Rasterizer();
+        auto& gpu = system_instance.GPU();
         switch (mode) {
         case FlushMode::Flush:
-            rasterizer.FlushRegion(overlap_start, overlap_size);
+            gpu.FlushRegion(overlap_start, overlap_size);
             break;
         case FlushMode::Invalidate:
-            rasterizer.InvalidateRegion(overlap_start, overlap_size);
+            gpu.InvalidateRegion(overlap_start, overlap_size);
             break;
         case FlushMode::FlushAndInvalidate:
-            rasterizer.FlushAndInvalidateRegion(overlap_start, overlap_size);
+            gpu.FlushAndInvalidateRegion(overlap_start, overlap_size);
             break;
         }
     };

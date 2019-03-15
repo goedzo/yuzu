@@ -5,8 +5,10 @@
 #pragma once
 
 #include <array>
+#include <bitset>
 #include <unordered_map>
 #include <vector>
+
 #include "common/assert.h"
 #include "common/bit_field.h"
 #include "common/common_funcs.h"
@@ -16,6 +18,10 @@
 #include "video_core/macro_interpreter.h"
 #include "video_core/memory_manager.h"
 #include "video_core/textures/texture.h"
+
+namespace Core {
+class System;
+}
 
 namespace VideoCore {
 class RasterizerInterface;
@@ -28,7 +34,8 @@ namespace Tegra::Engines {
 
 class Maxwell3D final {
 public:
-    explicit Maxwell3D(VideoCore::RasterizerInterface& rasterizer, MemoryManager& memory_manager);
+    explicit Maxwell3D(Core::System& system, VideoCore::RasterizerInterface& rasterizer,
+                       MemoryManager& memory_manager);
     ~Maxwell3D() = default;
 
     /// Register structure of the Maxwell3D engine.
@@ -498,7 +505,7 @@ public:
             f32 translate_z;
             INSERT_PADDING_WORDS(2);
 
-            MathUtil::Rectangle<s32> GetRect() const {
+            Common::Rectangle<s32> GetRect() const {
                 return {
                     GetX(),               // left
                     GetY() + GetHeight(), // top
@@ -1089,19 +1096,18 @@ public:
     MemoryManager& memory_manager;
 
     struct DirtyFlags {
-        u8 color_buffer = 0xFF;
-        bool zeta_buffer = true;
-
-        bool shaders = true;
+        std::bitset<8> color_buffer{0xFF};
+        std::bitset<32> vertex_array{0xFFFFFFFF};
 
         bool vertex_attrib_format = true;
-        u32 vertex_array = 0xFFFFFFFF;
+        bool zeta_buffer = true;
+        bool shaders = true;
 
         void OnMemoryWrite() {
-            color_buffer = 0xFF;
             zeta_buffer = true;
             shaders = true;
-            vertex_array = 0xFFFFFFFF;
+            color_buffer.set();
+            vertex_array.set();
         }
     };
 
@@ -1130,6 +1136,8 @@ public:
 
 private:
     void InitializeRegisterDefaults();
+
+    Core::System& system;
 
     VideoCore::RasterizerInterface& rasterizer;
 

@@ -43,7 +43,8 @@ Thread::~Thread() = default;
 
 void Thread::Stop() {
     // Cancel any outstanding wakeup events for this thread
-    CoreTiming::UnscheduleEvent(kernel.ThreadWakeupCallbackEventType(), callback_handle);
+    Core::System::GetInstance().CoreTiming().UnscheduleEvent(kernel.ThreadWakeupCallbackEventType(),
+                                                             callback_handle);
     kernel.ThreadWakeupCallbackHandleTable().Close(callback_handle);
     callback_handle = 0;
 
@@ -85,12 +86,14 @@ void Thread::WakeAfterDelay(s64 nanoseconds) {
 
     // This function might be called from any thread so we have to be cautious and use the
     // thread-safe version of ScheduleEvent.
-    CoreTiming::ScheduleEventThreadsafe(CoreTiming::nsToCycles(nanoseconds),
-                                        kernel.ThreadWakeupCallbackEventType(), callback_handle);
+    Core::System::GetInstance().CoreTiming().ScheduleEventThreadsafe(
+        Core::Timing::nsToCycles(nanoseconds), kernel.ThreadWakeupCallbackEventType(),
+        callback_handle);
 }
 
 void Thread::CancelWakeupTimer() {
-    CoreTiming::UnscheduleEventThreadsafe(kernel.ThreadWakeupCallbackEventType(), callback_handle);
+    Core::System::GetInstance().CoreTiming().UnscheduleEventThreadsafe(
+        kernel.ThreadWakeupCallbackEventType(), callback_handle);
 }
 
 static std::optional<s32> GetNextProcessorId(u64 mask) {
@@ -181,14 +184,13 @@ ResultVal<SharedPtr<Thread>> Thread::Create(KernelCore& kernel, std::string name
         return ERR_INVALID_PROCESSOR_ID;
     }
 
-    // TODO(yuriks): Other checks, returning 0xD9001BEA
-
     if (!Memory::IsValidVirtualAddress(owner_process, entry_point)) {
         LOG_ERROR(Kernel_SVC, "(name={}): invalid entry {:016X}", name, entry_point);
         // TODO (bunnei): Find the correct error code to use here
         return ResultCode(-1);
     }
 
+    auto& system = Core::System::GetInstance();
     SharedPtr<Thread> thread(new Thread(kernel));
 
     thread->thread_id = kernel.CreateNewThreadID();
@@ -197,7 +199,7 @@ ResultVal<SharedPtr<Thread>> Thread::Create(KernelCore& kernel, std::string name
     thread->stack_top = stack_top;
     thread->tpidr_el0 = 0;
     thread->nominal_priority = thread->current_priority = priority;
-    thread->last_running_ticks = CoreTiming::GetTicks();
+    thread->last_running_ticks = system.CoreTiming().GetTicks();
     thread->processor_id = processor_id;
     thread->ideal_core = processor_id;
     thread->affinity_mask = 1ULL << processor_id;
@@ -208,7 +210,7 @@ ResultVal<SharedPtr<Thread>> Thread::Create(KernelCore& kernel, std::string name
     thread->name = std::move(name);
     thread->callback_handle = kernel.ThreadWakeupCallbackHandleTable().Create(thread).Unwrap();
     thread->owner_process = &owner_process;
-    thread->scheduler = &Core::System::GetInstance().Scheduler(processor_id);
+    thread->scheduler = &system.Scheduler(processor_id);
     thread->scheduler->AddThread(thread, priority);
     thread->tls_address = thread->owner_process->MarkNextAvailableTLSSlotAsUsed(*thread);
 
@@ -257,7 +259,7 @@ void Thread::SetStatus(ThreadStatus new_status) {
     }
 
     if (status == ThreadStatus::Running) {
-        last_running_ticks = CoreTiming::GetTicks();
+        last_running_ticks = Core::System::GetInstance().CoreTiming().GetTicks();
     }
 
     status = new_status;

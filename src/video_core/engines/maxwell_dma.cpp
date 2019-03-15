@@ -2,6 +2,8 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include "common/assert.h"
+#include "common/logging/log.h"
 #include "core/core.h"
 #include "core/memory.h"
 #include "video_core/engines/maxwell_3d.h"
@@ -11,8 +13,9 @@
 
 namespace Tegra::Engines {
 
-MaxwellDMA::MaxwellDMA(VideoCore::RasterizerInterface& rasterizer, MemoryManager& memory_manager)
-    : memory_manager(memory_manager), rasterizer{rasterizer} {}
+MaxwellDMA::MaxwellDMA(Core::System& system, VideoCore::RasterizerInterface& rasterizer,
+                       MemoryManager& memory_manager)
+    : memory_manager(memory_manager), system{system}, rasterizer{rasterizer} {}
 
 void MaxwellDMA::CallMethod(const GPU::MethodCall& method_call) {
     ASSERT_MSG(method_call.method < Regs::NUM_REGS,
@@ -59,7 +62,7 @@ void MaxwellDMA::HandleCopy() {
     }
 
     // All copies here update the main memory, so mark all rasterizer states as invalid.
-    Core::System::GetInstance().GPU().Maxwell3D().dirty_flags.OnMemoryWrite();
+    system.GPU().Maxwell3D().dirty_flags.OnMemoryWrite();
 
     if (regs.exec.is_dst_linear && regs.exec.is_src_linear) {
         // When the enable_2d bit is disabled, the copy is performed as if we were copying a 1D
@@ -89,12 +92,12 @@ void MaxwellDMA::HandleCopy() {
     const auto FlushAndInvalidate = [&](u32 src_size, u64 dst_size) {
         // TODO(Subv): For now, manually flush the regions until we implement GPU-accelerated
         // copying.
-        rasterizer.FlushRegion(*source_cpu, src_size);
+        Core::System::GetInstance().GPU().FlushRegion(*source_cpu, src_size);
 
         // We have to invalidate the destination region to evict any outdated surfaces from the
         // cache. We do this before actually writing the new data because the destination address
         // might contain a dirty surface that will have to be written back to memory.
-        rasterizer.InvalidateRegion(*dest_cpu, dst_size);
+        Core::System::GetInstance().GPU().InvalidateRegion(*dest_cpu, dst_size);
     };
 
     if (regs.exec.is_dst_linear && !regs.exec.is_src_linear) {

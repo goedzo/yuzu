@@ -36,7 +36,8 @@
 #include "frontend/applets/software_keyboard.h"
 #include "frontend/applets/web_browser.h"
 #include "video_core/debug_utils/debug_utils.h"
-#include "video_core/gpu.h"
+#include "video_core/gpu_asynch.h"
+#include "video_core/gpu_synch.h"
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
 
@@ -78,6 +79,7 @@ FileSys::VirtualFile GetGameFileFromPath(const FileSys::VirtualFilesystem& vfs,
     return vfs->OpenFile(path, FileSys::Mode::Read);
 }
 struct System::Impl {
+    explicit Impl(System& system) : kernel{system} {}
 
     Cpu& CurrentCpuCore() {
         return cpu_core_manager.GetCurrentCore();
@@ -94,7 +96,7 @@ struct System::Impl {
     ResultStatus Init(System& system, Frontend::EmuWindow& emu_window) {
         LOG_DEBUG(HW_Memory, "initialized OK");
 
-        CoreTiming::Init();
+        core_timing.Initialize();
         kernel.Initialize();
 
         const auto current_time = std::chrono::duration_cast<std::chrono::seconds>(
@@ -114,13 +116,13 @@ struct System::Impl {
         if (web_browser == nullptr)
             web_browser = std::make_unique<Core::Frontend::DefaultWebBrowserApplet>();
 
-        auto main_process = Kernel::Process::Create(kernel, "main");
+        auto main_process = Kernel::Process::Create(system, "main");
         kernel.MakeCurrentProcess(main_process.get());
 
         telemetry_session = std::make_unique<Core::TelemetrySession>();
         service_manager = std::make_shared<Service::SM::ServiceManager>();
 
-        Service::Init(service_manager, *virtual_filesystem);
+        Service::Init(service_manager, system, *virtual_filesystem);
         GDBStub::Init();
 
         renderer = VideoCore::CreateRenderer(emu_window, system);
@@ -128,10 +130,16 @@ struct System::Impl {
             return ResultStatus::ErrorVideoCore;
         }
 
-        gpu_core = std::make_unique<Tegra::GPU>(renderer->Rasterizer());
+        is_powered_on = true;
+
+        if (Settings::values.use_asynchronous_gpu_emulation) {
+            gpu_core = std::make_unique<VideoCommon::GPUAsynch>(system, *renderer);
+        } else {
+            gpu_core = std::make_unique<VideoCommon::GPUSynch>(system, *renderer);
+        }
 
         cpu_core_manager.Initialize(system);
-        is_powered_on = true;
+
         LOG_DEBUG(Core, "Initialized OK");
 
         // Reset counters and set time origin to current frame
@@ -182,13 +190,13 @@ struct System::Impl {
 
     void Shutdown() {
         // Log last frame performance stats
-        auto perf_results = GetAndResetPerfStats();
-        Telemetry().AddField(Telemetry::FieldType::Performance, "Shutdown_EmulationSpeed",
-                             perf_results.emulation_speed * 100.0);
-        Telemetry().AddField(Telemetry::FieldType::Performance, "Shutdown_Framerate",
-                             perf_results.game_fps);
-        Telemetry().AddField(Telemetry::FieldType::Performance, "Shutdown_Frametime",
-                             perf_results.frametime * 1000.0);
+        const auto perf_results = GetAndResetPerfStats();
+        telemetry_session->AddField(Telemetry::FieldType::Performance, "Shutdown_EmulationSpeed",
+                                    perf_results.emulation_speed * 100.0);
+        telemetry_session->AddField(Telemetry::FieldType::Performance, "Shutdown_Framerate",
+                                    perf_results.game_fps);
+        telemetry_session->AddField(Telemetry::FieldType::Performance, "Shutdown_Frametime",
+                                    perf_results.frametime * 1000.0);
 
         is_powered_on = false;
 
@@ -205,7 +213,7 @@ struct System::Impl {
 
         // Shutdown kernel and core timing
         kernel.Shutdown();
-        CoreTiming::Shutdown();
+        core_timing.Shutdown();
 
         // Close app loader
         app_loader.reset();
@@ -232,9 +240,10 @@ struct System::Impl {
     }
 
     PerfStatsResults GetAndResetPerfStats() {
-        return perf_stats.GetAndResetStats(CoreTiming::GetGlobalTimeUs());
+        return perf_stats.GetAndResetStats(core_timing.GetGlobalTimeUs());
     }
 
+    Timing::CoreTiming core_timing;
     Kernel::KernelCore kernel;
     /// RealVfsFilesystem instance
     FileSys::VirtualFilesystem virtual_filesystem;
@@ -264,7 +273,7 @@ struct System::Impl {
     Core::FrameLimiter frame_limiter;
 };
 
-System::System() : impl{std::make_unique<Impl>()} {}
+System::System() : impl{std::make_unique<Impl>(*this)} {}
 System::~System() = default;
 
 Cpu& System::CurrentCpuCore() {
@@ -394,6 +403,14 @@ Kernel::KernelCore& System::Kernel() {
 
 const Kernel::KernelCore& System::Kernel() const {
     return impl->kernel;
+}
+
+Timing::CoreTiming& System::CoreTiming() {
+    return impl->core_timing;
+}
+
+const Timing::CoreTiming& System::CoreTiming() const {
+    return impl->core_timing;
 }
 
 Core::PerfStats& System::GetPerfStats() {
